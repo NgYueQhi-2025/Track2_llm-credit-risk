@@ -1,0 +1,3 @@
+README: This is a version-controllable prompt that returns the overall sentiment rate 
+Return the overall sentiment of the applicant text as JSON: {"sentiment": "positive|neutral|negative", "score": float}
+\nText:\n{text}
