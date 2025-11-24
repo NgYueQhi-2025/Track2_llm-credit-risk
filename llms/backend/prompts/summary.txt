@@ -1,0 +1,2 @@
+README: This is version-controllable prompt for the AI to return "summary" & "confidence" rate based on input
+You are a concise assistant. Read the applicant text below and return a JSON object with two keys: "summary" (1-2 sentence summary) and "confidence" (0-1 float). Applicant text:\n\n{text}
