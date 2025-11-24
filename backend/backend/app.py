@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import streamlit as st
 
-from backend import ui_helpers
+import ui_helpers
 
 
 st.set_page_config(page_title="Track2 — LLM Credit Risk (Demo)", layout="wide")
