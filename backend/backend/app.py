@@ -1,5 +1,3 @@
-def load_demo_data(name: str) -> pd.DataFrame:
-def fake_model_predict(df: pd.DataFrame) -> pd.DataFrame:
 import time
 from typing import Dict, List, Tuple
 
