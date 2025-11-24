@@ -1,0 +1,64 @@
+#Convert parsed LLM outputs to numeric features and save per-applicant features.csv
+import os
+import csv
+from typing import Dict, Any
+
+FEATURES_PATH = os.path.join(os.path.dirname(__file__), 'features.csv')
+FIELDNAMES = ['applicant_id', 'sentiment_score', 'risky_phrase_count', 'contradiction_flag', 'credibility_score']
+
+def map_parsed_to_features(applicant_id: str, parsed_dicts: Dict[str, Any]) -> Dict[str, Any]:
+	# sentiment
+	sent = parsed_dicts.get('sentiment', {})
+	if isinstance(sent, dict):
+		sentiment_score = float(sent.get('score', 0.0))
+	else:
+		# try a heuristic
+		sentiment_score = 0.0
+
+	# risky
+	risky = parsed_dicts.get('extract_risky', {})
+	if isinstance(risky, dict):
+		risky_count = int(risky.get('count', len(risky.get('risky_phrases', []))))
+	else:
+		risky_count = 0
+
+	# contradictions
+	contra = parsed_dicts.get('detect_contradictions', {})
+	contradiction_flag = int(contra.get('flag', 0)) if isinstance(contra, dict) else 0
+
+	# credibility_score: simple heuristic combining confidence and contradictions
+	# If summary provided, use its confidence; else default 0.5
+	summary = parsed_dicts.get('summary', {})
+	conf = float(summary.get('confidence', 0.5)) if isinstance(summary, dict) else 0.5
+
+	credibility_score = max(0.0, min(1.0, conf - 0.3*contradiction_flag - 0.05*risky_count))
+
+	return {
+		'applicant_id': applicant_id,
+		'sentiment_score': sentiment_score,
+		'risky_phrase_count': risky_count,
+		'contradiction_flag': contradiction_flag,
+		'credibility_score': credibility_score,
+	}
+
+
+def save_feature_row(row: Dict[str, Any]):
+	exists = os.path.exists(FEATURES_PATH)
+	with open(FEATURES_PATH, 'a', newline='', encoding='utf-8') as f:
+		writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+		if not exists:
+			writer.writeheader()
+		writer.writerow(row)
+
+
+if __name__ == '__main__':
+	# quick demo
+	parsed = {
+		'sentiment': {'score': 0.03, 'sentiment': 'neutral'},
+		'extract_risky': {'risky_phrases': ['late payment'], 'count': 1},
+		'detect_contradictions': {'contradictions': [], 'flag': 0},
+		'summary': {'summary': 'Small business owner...', 'confidence': 0.7}
+	}
+	row = map_parsed_to_features('app_001', parsed)
+	save_feature_row(row)
+	print('Saved demo row to', FEATURES_PATH)
