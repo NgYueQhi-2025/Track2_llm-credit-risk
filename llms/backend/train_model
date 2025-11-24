@@ -1,21 +1,25 @@
+#README: pip install scikit-learn
 #Train pipeline: reads artifacts/features.csv and an optional structured CSV, trains LogisticRegression & RandomForest
 
 import os
 import joblib
-from sklearn.base import accuracy_score
-from sklearn.discriminant_analysis import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, accuracy_score
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 
+# Module-level paths so functions can reference them
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Paths for artifacts, model and scaler
+ARTIFACTS_DIR = os.path.join(BASE_DIR, 'artifacts')
+MODEL_PATH = os.path.join(ARTIFACTS_DIR, 'model.joblib')
+SCALER_PATH = os.path.join(ARTIFACTS_DIR, 'scaler.joblib')
 
 def load_features(tabular_csv: str | None = None):
 	import pandas as pd
-	import os
 
 	# Load features.csv
-	BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 	features_path = os.path.join(BASE_DIR, 'artifacts', 'features.csv')
 	df = pd.read_csv(features_path)
 
@@ -31,8 +35,9 @@ def load_features(tabular_csv: str | None = None):
 		else:
 			df[col] = 0.0
 
-	# The following block is duplicated and references 'df' outside its scope, so it should be removed.
+	return df
 
+	# The following block is duplicated and references 'df' outside its scope, so it should be removed.
 
 
 
@@ -74,21 +79,15 @@ def train_and_save(tabular_csv: str | None = None, choose_model: str = 'random_f
 
 	# Save model and scaler
 	os.makedirs(os.path.join(BASE_DIR, 'artifacts'), exist_ok=True)
-	joblib.dump({'model': chosen, 'type': choose_model}, MODEL_PATH)
-	joblib.dump(scaler, SCALER_PATH)
-
-	return {'models': results, 'saved_model': choose_model, 'model_path': MODEL_PATH, 'scaler_path': SCALER_PATH}
-
-
-
-
 if __name__ == '__main__':
-    print('Training with demo settings...')
-    res = train_and_save()
-    print('Training results:')
-for m, info in res['models'].items():
-    print('Model:', m)
-    print('Accuracy:', info['accuracy'])
-    print(info['report'])
-    print('Saved model to', res['model_path'])
-    print('Saved scaler to', res['scaler_path'])
+	print('Training with demo settings...')
+	res = train_and_save()
+	print('Training results:')
+	for m, info in res['models'].items():
+		print('Model:', m)
+		print('Accuracy:', info['accuracy'])
+		print(info['report'])
+		print('Saved model to', res['model_path'])
+		print('Saved scaler to', res['scaler_path'])
+		print('Saved model to', res['model_path'])
+		print('Saved scaler to', res['scaler_path'])
