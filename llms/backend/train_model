@@ -1,0 +1,94 @@
+#Train pipeline: reads artifacts/features.csv and an optional structured CSV, trains LogisticRegression & RandomForest
+
+import os
+import joblib
+from sklearn.base import accuracy_score
+from sklearn.discriminant_analysis import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
+
+
+def load_features(tabular_csv: str | None = None):
+	import pandas as pd
+	import os
+
+	# Load features.csv
+	BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+	features_path = os.path.join(BASE_DIR, 'artifacts', 'features.csv')
+	df = pd.read_csv(features_path)
+
+	# Optionally merge with tabular_csv
+	if tabular_csv:
+		tabular_df = pd.read_csv(tabular_csv)
+		df = df.merge(tabular_df, how='left', left_index=True, right_index=True)
+
+	# Ensure columns are numeric or set to 0.0 if missing
+	for col in ['sentiment_score', 'risky_phrase_count', 'contradiction_flag', 'credibility_score']:
+		if col in df.columns:
+			df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+		else:
+			df[col] = 0.0
+
+	# The following block is duplicated and references 'df' outside its scope, so it should be removed.
+
+
+
+
+
+
+
+def train_and_save(tabular_csv: str | None = None, choose_model: str = 'random_forest'):
+	#Train models and save selected model + scaler. choose_model: 'random_forest' or 'logistic'.
+	#Returns a dict with training metrics.
+
+	df = load_features(tabular_csv)
+
+	feature_cols = ['sentiment_score', 'risky_phrase_count', 'contradiction_flag', 'credibility_score']
+	X = df[feature_cols]
+	y = df['label']
+
+	scaler = StandardScaler()
+	Xs = scaler.fit_transform(X)
+
+	X_train, X_test, y_train, y_test = train_test_split(Xs, y, test_size=0.2, random_state=42, stratify=y)
+
+	# Models
+	lr = LogisticRegression(random_state=42, max_iter=1000)
+	rf = RandomForestClassifier(random_state=42, n_estimators=200)
+
+	lr.fit(X_train, y_train)
+	rf.fit(X_train, y_train)
+
+	# Evaluate both
+	results = {}
+	for name, model in (('logistic', lr), ('random_forest', rf)):
+		preds = model.predict(X_test)
+		acc = accuracy_score(y_test, preds)
+		report = classification_report(y_test, preds, zero_division=0)
+		results[name] = {'accuracy': float(acc), 'report': report}
+
+	# Choose model to save
+	chosen = rf if choose_model == 'random_forest' else lr
+
+	# Save model and scaler
+	os.makedirs(os.path.join(BASE_DIR, 'artifacts'), exist_ok=True)
+	joblib.dump({'model': chosen, 'type': choose_model}, MODEL_PATH)
+	joblib.dump(scaler, SCALER_PATH)
+
+	return {'models': results, 'saved_model': choose_model, 'model_path': MODEL_PATH, 'scaler_path': SCALER_PATH}
+
+
+
+
+if __name__ == '__main__':
+    print('Training with demo settings...')
+    res = train_and_save()
+    print('Training results:')
+for m, info in res['models'].items():
+    print('Model:', m)
+    print('Accuracy:', info['accuracy'])
+    print(info['report'])
+    print('Saved model to', res['model_path'])
+    print('Saved scaler to', res['scaler_path'])
