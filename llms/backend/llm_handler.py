@@ -1,77 +1,75 @@
-#LLM handler: supports real OpenAI and mock mode + simple JSON response parsing + file-based caching.
-import json
 import os
-from logging import Handler
-from llm_cache_helpers import _hash_input, _load_cache, _save_cache
+import json
+import hashlib
+from typing import Dict, Any, Optional
+
+# cache file next to this script
+CACHE_FILE = os.path.join(os.path.dirname(__file__), ".llm_cache.json")
 
 
-def _mock_response(self, prompt, mode):
-	if mode == 'summary':
-		return json.dumps({"summary": "Applicant describes entrepreneurial experience; moderate financial detail.", "confidence": 0.82})
-	if mode == 'extract_risky':
-		return json.dumps({"risky_phrases": ["late payments", "multiple loans"], "count": 2})
-	if mode == 'detect_contradictions':
-		return json.dumps({"contradictions": ["claimed revenue inconsistent with bank statement"], "flag": 1})
-	if mode == 'sentiment':
-		return json.dumps({"sentiment": "neutral", "score": 0.05})
-	return json.dumps({"raw": "mocked"})
+def _hash_input(s: str) -> str:
+    """Return a short sha256 hex digest for cache keys."""
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-def call_llm(self, prompt: str, mode: str = 'summary', temperature: float = 0.0, use_cache: bool = True) -> str:
-	"""Call the LLM (real or mock). Returns raw string output.
-	Caching: keyed by SHA256(prompt + mode)"""
-	key = _hash_input(prompt + '::' + mode)
-	cache = _load_cache()
-	if use_cache and key in cache:
-		return cache[key]
-
-	if self.mode == 'mock':
-		out = self._mock_response(prompt, mode)
-	else:
-		out = self._call_openai(prompt, temperature=temperature)
-
-	# Save to cache
-	cache[key] = out
-	_save_cache(cache)
-	return out
+def _load_cache() -> Dict[str, Any]:
+    """Load cache dict from disk. Returns empty dict on error."""
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
 
 
-def parse_response(self, raw: str, mode: str = 'summary') -> dict:
-	"""Parse LLM text output. We ask LLM to return JSON in prompts, but be defensive.
-	Returns a dictionary with expected keys for each mode.
-	"""
-	try:
-		parsed = json.loads(raw)
-		return parsed
-	except Exception:
-		# Best-effort fallback: try to extract lines like key: value
-		out = {}
-		for line in raw.splitlines():
-			if ':' in line:
-				k, v = line.split(':', 1)
-				out[k.strip()] = v.strip()
-		if out:
-			return out
-		return {"raw": raw}
+def _save_cache(cache: Dict[str, Any]) -> None:
+    """Atomically write cache dict to disk."""
+    tmp = CACHE_FILE + ".tmp"
+    os.makedirs(os.path.dirname(CACHE_FILE) or ".", exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CACHE_FILE)
 
 
+def call_llm(prompt: str, mode: str = 'summary', temperature: float = 0.0, use_cache: bool = True, mock: bool = True) -> str:
+    """Call the LLM (mock or real). Returns raw string output.
 
+    Caching: keyed by SHA256(prompt + '::' + mode + '::' + str(temperature))
+    """
+    # Mock responses for testing — keep inside function
+    if mock:
+        if mode == 'summary':
+            return json.dumps({"summary": "Applicant describes entrepreneurial experience; moderate financial detail.", "confidence": 0.82})
+        if mode == 'extract_risky':
+            return json.dumps({"risky_phrases": ["late payments", "multiple loans"], "count": 2})
+        if mode == 'detect_contradictions':
+            return json.dumps({"contradictions": ["claimed revenue inconsistent with bank statement"], "flag": 1})
+        if mode == 'sentiment':
+            return json.dumps({"sentiment": "neutral", "score": 0.05})
+        return json.dumps({"raw": "mocked"})
 
-# Utility: load prompt text from backend/prompts
-def load_prompt_template(name: str) -> str:
-    ppath = os.path.join(os.path.dirname(__file__), 'prompts', name + '.txt')
-    with open(ppath, 'r', encoding='utf-8') as f:
-        return f.read()
+    key = _hash_input(prompt + '::' + mode + '::' + str(temperature))
+    cache = _load_cache()
+    if use_cache and key in cache:
+        return cache[key]
 
+    # === PLACEHOLDER: real LLM call ===
+    # Replace the next line with your actual LLM invocation and set `result`.
+    result = json.dumps({"raw": "<real-llm-response-placeholder>"})
 
+    if use_cache:
+        cache[key] = result
+        try:
+            _save_cache(cache)
+        except Exception:
+            pass
+
+    return result
 
 
 if __name__ == '__main__':
-# Quick demo
-    lh = Handler(mode='mock')
-template = load_prompt_template('summary')
-applicant_text = "I run a small online shop, revenue roughly $2k/month. I had one late payment last year."
-prompt = template.replace('{text}', applicant_text)
-raw = lh.call_llm(prompt, mode='summary')
-print('RAW:', raw)
-print('PARSED:', lh.parse_response(raw, mode='summary'))
+    # quick local test to verify cache behavior
+    prompt = "Test prompt for caching"
+    print('First call (mock) ->', call_llm(prompt, mode='summary', use_cache=True, mock=True))
+    print('Second call (mock) ->', call_llm(prompt, mode='summary', use_cache=True, mock=True))
