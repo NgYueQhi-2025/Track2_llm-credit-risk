@@ -1,0 +1,3 @@
+README: This is a version-controllable prompt for the AI to extract risky keywords from user input
+Extract phrases from the applicant text that indicate financial risk or instability. Return JSON: {"risky_phrases": [...], "count": n}
+\nText:\n{text}
