@@ -1,0 +1,6 @@
+flask>=2.0
+openai
+scikit-learn
+pandas
+joblib
+numpy
