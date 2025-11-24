@@ -1,0 +1,3 @@
+README: This is a version-controllable prompt that checks the applicants' input text for contradictory statements
+Check the applicant text for contradictory statements (e.g., claiming low expenses but very low savings). Return JSON: {"contradictions": [...], "flag": 0 or 1}
+\nText:\n{text}
