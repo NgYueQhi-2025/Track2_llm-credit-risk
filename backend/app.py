@@ -13,26 +13,49 @@ st.set_page_config(page_title="LLM Credit Risk — Demo", layout="wide")
 # --- NEW: WELCOME DIALOG FUNCTION ---
 @st.dialog("👋 Welcome to LLM Credit Risk")
 def show_onboarding_guide():
-    st.markdown("""
-    **Transform raw application text into credit risk insights.**
-    
-    This tool uses AI to analyze loan applicants by combining their **financial data** (income, age) with **unstructured text** (interview notes, essays).
-    
-    ### 🚀 How to use this app:
-    1.  **Upload Data:** Drag & drop your CSV file in the sidebar.
-    2.  **Run Model:** Click the "Run Model" button to extract risk signals.
-    3.  **Analyze:** Click on specific applicants to see why they were flagged.
-    
-    ### 📂 CSV Format Requirements:
-    Your CSV file must have these columns:
-    * `id` (unique number)
-    * `name` (applicant name)
-    * `income` (number)
-    * `text_notes` (The text you want the AI to analyze)
-    """)
-    if st.button("I understand, let's start!"):
-        st.session_state["first_visit"] = False
-        st.rerun()
+    st.markdown("## 💡 Welcome to LLM Credit Risk Assessment")
+    st.markdown(
+        """
+        ### **Unlock Deeper Credit Insights from Unstructured Data**
+
+        Tired of credit scoring that only sees numbers? The **LLM Credit Risk Assessment Tool** transforms the way you evaluate applicants by leveraging **Large Language Models (LLMs)** to analyze the nuanced, **unstructured text** found in loan applications, customer messages, or transaction descriptions. Our prototype provides a **transparent and interpretable** risk assessment by combining traditional **financial data** with rich, **behavioral insights** extracted from text.
+        """
+    )
+
+    st.markdown("---")
+    st.markdown("### **🚀 How to Use the App**")
+    st.write("1.  **Upload Data:** Drag and drop your file (CSV, PDF, or image file like PNG/JPG) into the sidebar.")
+    st.write("2.  **Run Analysis:** Click the \"Run Model\" button to initiate the AI and extract key **risk signals** and behavioral patterns.")
+    st.write("3.  **Analyze & Decide:** Review the combined risk score and click on specific applicants to see **clear, human-interpretable explanations** of why they were flagged.")
+
+    st.markdown("---")
+    st.markdown("### **📂 Supported Data Formats**")
+    st.markdown(
+        """
+        To ensure accurate extraction and scoring, your data file must contain the core information needed for both structured and unstructured analysis.
+
+        | Column Name | Requirement | Purpose |
+        | :--- | :--- | :--- |
+        | **id** | Unique numerical identifier | For tracking individual applicants. |
+        | **name** | Applicant's Full Name | For easy identification. |
+        | **income** | Numerical value (e.g., Annual Salary) | Essential structured financial input. |
+        | **text_notes** | The **raw text** for AI analysis (e.g., loan essay, customer messages, or transaction snippets). | The primary input for LLM-driven behavioral risk extraction. |
+        """
+    )
+
+    st.markdown("**Supported File Types for Upload:** CSV, PDF, PNG, and JPG. We will automatically extract the required fields from structured files (CSV) or attempt to parse them from unstructured documents and images (PDF/PNG/JPG).")
+
+    st.markdown("---")
+    col_left, col_mid, col_right = st.columns([1, 1, 1])
+    with col_left:
+        if st.button("Got it — close guide"):
+            st.session_state.seen_welcome = True
+    with col_mid:
+        if st.button("Show again on reload"):
+            st.session_state.seen_welcome = False
+    with col_right:
+        if st.button("Do not show again"):
+            st.session_state.dont_show_welcome = True
 
 @st.cache_data
 def load_demo_data(name: str) -> pd.DataFrame:
@@ -89,46 +112,56 @@ def main() -> None:
     # --- NEW: TRIGGER ONBOARDING ---
     if "first_visit" not in st.session_state:
         st.session_state["first_visit"] = True
+    if "seen_welcome" not in st.session_state:
+        st.session_state["seen_welcome"] = False
+    if "dont_show_welcome" not in st.session_state:
+        st.session_state["dont_show_welcome"] = False
     
     if "model_results" not in st.session_state:
         st.session_state["model_results"] = None
 
-    # Show the dialog only if it's the first visit
-    if st.session_state["first_visit"]:
+    # Show the dialog only if it's the first visit and not suppressed
+    if st.session_state["first_visit"] and not st.session_state.get("dont_show_welcome", False) and not st.session_state.get("seen_welcome", False):
         show_onboarding_guide()
 
     # Sidebar: upload, demo selector, run
     with st.sidebar:
         st.header("Inputs")
-        
-        # --- NEW: HELP & TEMPLATE SECTION ---
-        with st.expander("ℹ️ Help & CSV Template"):
-            st.write("Your CSV needs these columns:")
-            st.code("id, name, income, text_notes")
-            
-            # Create a sample template for download
-            sample_data = pd.DataFrame([
-                {"id": 1, "name": "John Doe", "income": 50000, "age": 30, "text_notes": "Customer has good history."}
-            ])
-            csv_template = convert_df_to_csv(sample_data)
-            
-            st.download_button(
-                label="📥 Download CSV Template",
-                data=csv_template,
-                file_name="credit_risk_template.csv",
-                mime="text/csv",
-            )
-        # ------------------------------------
+
+        # --- File uploader (bigger visual area) ---
+        # Inject small CSS to make the uploader area more prominent
+        st.markdown(
+            """
+            <style>
+            .uploader-box {
+              border: 2px dashed #2C7BE5;
+              border-radius: 8px;
+              padding: 24px;
+              text-align: center;
+              background: rgba(44,123,229,0.03);
+              margin-bottom: 8px;
+            }
+            .uploader-box h3 { margin: 6px 0 0 0; }
+            .uploader-box p { margin: 6px 0 0 0; color: #6c757d }
+            input[type="file"] { min-height: 140px; }
+            </style>
+            <div class="uploader-box">
+              <h3>Click to upload or drag and drop</h3>
+              <p>Supported: CSV, PDF, PNG, JPG (Max 10MB)</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         uploaded_files = st.file_uploader(
-            "Click to upload or drag and drop",
+            "",
             type=["csv", "pdf", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
         )
 
         st.markdown("---")
         st.subheader("Applicant scope")
-        applicant_scope = st.selectbox("Who are you uploading?", ["Individuals", "Businesses", "Both"], index=0)
+        applicant_scope = st.selectbox("Who are you uploading?", ["Individuals", "Businesses"], index=0)
 
         demo = st.selectbox("Or choose a demo dataset", ["Demo A", "Demo B"])     
         mock_mode = st.checkbox("Mock mode (no LLM/API)", value=True)
