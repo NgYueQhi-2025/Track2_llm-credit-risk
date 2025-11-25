@@ -1,0 +1,4 @@
+applicant_id,sentiment_score,risky_phrase_count,contradiction_flag,credibility_score
+101,0.05,0,0,0.65
+102,-0.2,2,1,0.15
+103,0.1,1,0,0.5

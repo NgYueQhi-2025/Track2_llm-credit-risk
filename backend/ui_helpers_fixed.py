@@ -13,7 +13,6 @@ def kpi_card(col: st.delta_generator.DeltaGenerator, title: str, value, help_tex
     """
     with col:
         try:
-            # use st.metric when sensible
             if isinstance(value, (int, float)):
                 st.metric(label=title, value=value)
             else:
@@ -30,16 +29,16 @@ def render_table(df: pd.DataFrame) -> None:
     if df is None or df.empty:
         st.info("No data to show")
         return
-    st.dataframe(df.reset_index(drop=True), use_container_width=True)
+    st.dataframe(df.reset_index(drop=True), width='stretch')
 
 
 def highlight_snippet(text: str) -> str:
-    """Return HTML-wrapped snippet for display in Streamlit (safe-ish).
+    """Return HTML-wrapped snippet for display in Streamlit.
 
-    This is a small helper for showing explanation text with light formatting.
+    Use `unsafe_allow_html=True` when rendering the returned HTML with `st.markdown`.
     """
-    # very small HTML wrapper — Streamlit will render this as markdown
-    # when used with `unsafe_allow_html=True` via st.markdown.
-    escaped = text.replace("\n", "<br>")
+    if text is None:
+        return ""
+    escaped = str(text).replace("\n", "<br>")
     html = f"<div style='padding:10px;background:#f8f9fb;border-radius:6px'>{escaped}</div>"
     return html

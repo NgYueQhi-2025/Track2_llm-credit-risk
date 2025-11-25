@@ -85,6 +85,45 @@ OPENAI_API_KEY = st.secrets.get('OPENAI_API_KEY') if hasattr(st, 'secrets') else
 USE_MOCK = (os.environ.get('USE_MOCK_LLM','true').lower() == 'true')
 ```
 
+## Mock vs Live Flows (safe demo & production switch)
+
+This project supports two execution modes so you can demo reliably without external API calls (Mock mode) and switch to a Live LLM when you're ready.
+
+- Mock mode (recommended for demos / judging):
+    - The Streamlit UI includes a `Mock mode (no LLM/API)` checkbox in the sidebar. When enabled, the app will avoid real LLM API calls.
+    - If precomputed artifacts exist, the app will use them for deterministic outputs:
+        - `backend/artifacts/features.csv` — per-applicant numeric features (columns: `applicant_id`,`sentiment_score`,`risky_phrase_count`,`contradiction_flag`,`credibility_score`).
+        - `backend/artifacts/model.pkl` — a small `sklearn` model used for `predict_proba`. If present, the UI will use it to generate risk scores.
+    - A helper script `backend/artifacts/setup_demo.py` is provided to generate demo artifacts (toy `model.pkl`, `features.csv`, and `data/demo.csv`). Run it from the repo root:
+
+```powershell
+python backend\artifacts\setup_demo.py
+```
+
+    - After running the script, start the app and ensure the sidebar checkbox `Mock mode` is checked. The app will then: read `data/demo.csv` (or uploaded CSV), look up precomputed features in `backend/artifacts/features.csv` when possible, and use `backend/artifacts/model.pkl` to produce deterministic predictions.
+
+- Live mode (production / real LLM):
+    - Uncheck `Mock mode` in the UI or set `USE_MOCK_LLM=false` in your environment.
+    - Implement a real provider call inside `llms/backend/llm_handler.py` — currently the file contains a `call_llm` stub with a `mock` parameter and a simple on-disk caching helper. Replace the `mock=False` branch of `call_llm` with your provider call (OpenAI, HF, etc.) and ensure you load API keys from env vars or `st.secrets`.
+    - Example pattern inside `llms/backend/llm_handler.py`:
+
+```python
+# load API key securely
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+
+def call_llm(prompt, mode='summary', mock=False):
+        if mock:
+                return ... # existing mock
+        # call real provider here (openai.ChatCompletion.create or requests to an API)
+        # return a JSON-serializable string matching the existing mock outputs
+```
+
+Notes & tips:
+- The integrator layer (`backend/integrations.py`) implements retry logic (exponential backoff) for LLM extraction and will fall back to a deterministic heuristic if a model artifact is missing.
+- For reliable demos (no cost, deterministic results), use `Mock mode` and run `backend/artifacts/setup_demo.py` once to populate demo artifacts.
+- Keep secrets out of source control; use `st.secrets` or your host's secrets manager to provide `OPENAI_API_KEY` when running in Live mode.
+
+
 ## Deployment
 
 ### Streamlit Community Cloud (recommended)

@@ -26,6 +26,34 @@ def health():
 def llm_test():
     data = request.json
     text = data.get("text", "")
+from flask import Flask, request, jsonify
+from backend.llm_handler import call_llm
+from backend.feature_extraction import extract_features
+from backend.train_model import train_model
+import joblib
+import os
+
+app = Flask(__name__)
+
+MODEL_PATH = "artifacts/model.pkl"
+SCALER_PATH = "artifacts/scaler.pkl"
+
+
+# ------------------------------------------------------------
+# Health Check
+# ------------------------------------------------------------
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "message": "API is running"}), 200
+
+
+# ------------------------------------------------------------
+# Test LLM Integration (Useful for debugging)
+# ------------------------------------------------------------
+@app.route("/llm-test", methods=["POST"])
+def llm_test():
+    data = request.json
+    text = data.get("text", "")
 
     if not text:
         return jsonify({"error": "Missing 'text' in request"}), 400
