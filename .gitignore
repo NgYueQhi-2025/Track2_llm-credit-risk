@@ -206,3 +206,4 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 backend/artifacts/model.pkl
+Track2_llm-credit-risk/

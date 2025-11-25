@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 import importlib.util
 import joblib
+import inspect
 
 
 # Attempt to import the LLM handler from the `llms` package; if the
@@ -136,7 +137,41 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                     return {"parsed": parsed, "features": features}
 
             try:
-                raw = llm_handler.call_llm(prompt_base, mode=mode, temperature=0.0, use_cache=True, mock=mock)
+                # Call the LLM handler in a backwards-compatible way. Build a
+                # kwargs dict from the function signature so we only pass names
+                # the implementation accepts. If that fails (rare positional-only
+                # implementations), fall back to positional-style attempts.
+                func = llm_handler.call_llm
+                try:
+                    sig = inspect.signature(func)
+                    params = sig.parameters
+                except Exception:
+                    sig = None
+                    params = {}
+
+                # Build kwargs only for parameters that actually exist on the function
+                kwargs = {}
+                if 'mode' in params:
+                    kwargs['mode'] = mode
+                if 'temperature' in params:
+                    kwargs['temperature'] = 0.0
+                if 'use_cache' in params:
+                    kwargs['use_cache'] = True
+                if 'mock' in params:
+                    kwargs['mock'] = mock
+
+                try:
+                    raw = func(prompt_base, **kwargs) if kwargs else func(prompt_base)
+                except TypeError:
+                    # Fall back to positional attempts: try common positional orders
+                    try:
+                        raw = func(prompt_base, mode, 0.0, True, mock)
+                    except Exception:
+                        try:
+                            raw = func(prompt_base, mode)
+                        except Exception:
+                            # Last resort: call with prompt only
+                            raw = func(prompt_base)
                 parsed_val = _safe_json_load(raw)
                 parsed[mode] = parsed_val
                 break
@@ -291,8 +326,10 @@ def predict(features: Dict[str, Any]) -> Dict[str, Any]:
 
     if score is None:
         # simple deterministic heuristic: higher risky count and low credibility -> higher risk
-        score = max(0.0, min(1.0, 0.4 * (vec[1] / (1 + vec[1])) + 0.35 * (1 - vec[3]) + 0.25 * vec[2]))
+        # adjusted weights to make risky phrases and contradictions more influential for demo clarity
+        score = max(0.0, min(1.0, 0.55 * (vec[1] / (1 + vec[1])) + 0.25 * (1 - vec[3]) + 0.20 * vec[2]))
 
-    label = "low" if score < 0.5 else "high"
+    # lower the threshold slightly so borderline cases surface as 'high' in demos
+    label = "low" if score < 0.45 else "high"
 
     return {"score": float(score), "risk_label": label}

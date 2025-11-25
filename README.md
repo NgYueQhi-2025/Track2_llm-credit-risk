@@ -67,23 +67,43 @@ Demo synthetic examples are loaded by default if you don't upload a CSV.
 
 Use host secret managers (Streamlit Cloud / Render) or local `.streamlit/secrets.toml` for development. Do NOT commit secrets to the repo.
 
-Minimal (MVP) env vars:
+Minimal (MVP) env vars (new and existing):
 
-- `USE_MOCK_LLM` — `true` / `false` (default `true` for demo).  
-- `OPENAI_API_KEY` — OpenAI key (only if using OpenAI).  
-- `HF_API_TOKEN` — Hugging Face token (optional).  
-- `CACHE_TTL_SECONDS` — e.g. `3600`.  
+- `USE_MOCK_LLM` — `true` / `false` (default `true` for demo).
+- `LLM_PROVIDER` — `openai` / `ollama` / `mock` (default `openai` if `USE_MOCK_LLM=false`).
+- `LOCAL_LLM_URL` — e.g. `http://127.0.0.1:11434` (when using a local Ollama-compatible HTTP gateway).
+- `OPENAI_API_KEY` — OpenAI key (only if using OpenAI).
+- `HF_API_TOKEN` — Hugging Face token (optional).
+- `CACHE_TTL_SECONDS` — e.g. `3600`.
 - `RANDOM_SEED` — e.g. `42` for reproducible demos.
 
-Access in code:
+Access in code (example):
 
 ```python
 import os
 import streamlit as st
 
-OPENAI_API_KEY = st.secrets.get('OPENAI_API_KEY') if hasattr(st, 'secrets') else os.environ.get('OPENAI_API_KEY')
 USE_MOCK = (os.environ.get('USE_MOCK_LLM','true').lower() == 'true')
+LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'openai')
+LOCAL_LLM_URL = os.environ.get('LOCAL_LLM_URL')
+OPENAI_API_KEY = st.secrets.get('OPENAI_API_KEY') if hasattr(st, 'secrets') else os.environ.get('OPENAI_API_KEY')
 ```
+
+Notes:
+- `LLM_PROVIDER` controls which provider the `llms/backend/llm_handler.py` will attempt to use. The code supports `openai` (remote OpenAI API), `ollama` (local Ollama-compatible HTTP gateway), and `mock` (deterministic demo responses).
+- When `LLM_PROVIDER=ollama`, set `LOCAL_LLM_URL` to the base URL of your Ollama HTTP gateway (for example `http://127.0.0.1:11434`). The handler will attempt common Ollama-compatible endpoints and payload shapes.
+- For offline demos the repo includes a small mock Ollama server at `backend/artifacts/mock_ollama_server.py` which you can run locally to emulate a provider during development.
+
+Run the mock server (PowerShell):
+
+```powershell
+# from repo root
+# Ensure venv activated or use absolute python path
+python backend\artifacts\mock_ollama_server.py
+# Default: listens on http://127.0.0.1:11434
+```
+
+Use `LLM_PROVIDER=ollama` with `LOCAL_LLM_URL=http://127.0.0.1:11434` to point the app at the mock server for full-path testing without a paid provider.
 
 ## Mock vs Live Flows (safe demo & production switch)
 

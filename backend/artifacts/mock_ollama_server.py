@@ -72,4 +72,5 @@ def generate():
 
 if __name__ == '__main__':
     # Run on the default port expected by the app
-    app.run(host='127.0.0.1', port=11434)
+    # Bind to all interfaces to avoid potential loopback/IPv6 issues in some environments
+    app.run(host='0.0.0.0', port=11434)

@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import logging
 from typing import Any
 
 _OPENAI_AVAILABLE = False
@@ -54,7 +55,14 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
             return json.dumps({"sentiment": "neutral", "score": 0.05})
         return json.dumps({"raw": "mocked"})
 
-    # CORRECTION 2: Default to 'ollama' if 'openai' isn't explicitly set, helpful for your local setup
+    # configure a module-level logger for debug tracing
+    logger = logging.getLogger(__name__)
+    if not logger.handlers:
+        logging.basicConfig()
+    logger.setLevel(logging.DEBUG)
+
+    # Default provider: prefer local Ollama-like gateways for developer flow,
+    # but allow explicit override via LLM_PROVIDER (e.g. 'openai' or 'huggingface').
     provider = os.getenv("LLM_PROVIDER", "ollama").lower()
 
     # If provider explicitly set to 'ollama' (local server), attempt HTTP calls
@@ -101,11 +109,25 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
             payloads.append({"model": model, "messages": [{"role": "user", "content": user_prompt}], "temperature": temperature})
 
             for payload in payloads:
-                try:
-                    resp = requests.post(url, headers=headers, json=payload, timeout=30) # Increased timeout slightly
+                    # Debug: log the outgoing attempt
+                    try:
+                        logger.debug("LLM HTTP POST %s payload=%s", url, json.dumps(payload, ensure_ascii=False))
+                    except Exception:
+                        logger.debug("LLM HTTP POST %s (payload not JSON-serializable)", url)
+
+                    # Use a slightly increased timeout to accommodate local dev boxes
+                    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+
+                    # Debug: log response status and truncated body
+                    try:
+                        body_preview = resp.text[:2000]
+                        logger.debug("LLM HTTP RESPONSE %s status=%s body=%s", url, resp.status_code, body_preview)
+                    except Exception:
+                        logger.debug("LLM HTTP RESPONSE %s status=%s (body unavailable)", url, resp.status_code)
                     if resp.status_code != 200:
                         last_exc = RuntimeError(f"{url} returned {resp.status_code}: {resp.text}")
                         continue
+
                     # Try to parse common response shapes
                     text = None
                     try:
@@ -147,9 +169,151 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
                             return json.dumps(parsed)
                         return text
                 except Exception as e:
+                    logger.exception("LLM HTTP attempt to %s failed: %s", url, e)
                     last_exc = e
                     continue
         raise RuntimeError(f"Ollama/local LLM call failed: {last_exc}")
+
+    # If provider is Hugging Face (local TGI or HF Inference), attempt HTTP calls
+    if provider in ("huggingface", "hf", "hugging_face"):
+        try:
+            import requests
+            _REQUESTS_AVAILABLE = True
+        except Exception:
+            _REQUESTS_AVAILABLE = False
+
+        if not _REQUESTS_AVAILABLE:
+            raise RuntimeError("LLM provider 'huggingface' selected but the 'requests' package is not installed.")
+
+        base = os.getenv("LOCAL_LLM_URL", "http://localhost:8080")
+        model = os.getenv("HF_MODEL", os.getenv("OPENAI_MODEL", "gpt2"))
+        hf_key = os.getenv("HF_API_KEY")
+
+        # Build simple prompts per mode (reuse same messages as other providers)
+        if mode == "summary":
+            user_prompt = (
+                f"Analyze the applicant data and return JSON like: {json.dumps({'summary': '...', 'confidence': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "extract_risky":
+            user_prompt = (
+                f"Extract risky phrases. Return JSON like: {json.dumps({'risky_phrases': ['...'], 'count': 0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "detect_contradictions":
+            user_prompt = (
+                f"Detect contradictions. Return JSON like: {json.dumps({'contradictions': ['...'], 'flag': 0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "sentiment":
+            user_prompt = (
+                f"Return sentiment. JSON like: {json.dumps({'sentiment': 'neutral', 'score': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        else:
+            user_prompt = f"Analyze input and return JSON. Input:\n{prompt}\n\nReturn only JSON."
+
+        # Candidate endpoints for various HF-compatible servers (TGI, HF Inference, custom)
+        endpoints = [
+            # Router-compatible endpoints (Hugging Face now prefers router.huggingface.co)
+            f"/api/models/{model}/infer",
+            f"/api/models/{model}/generate",
+            f"/api/models/{model}/predict",
+            # Backwards-compatible HF shapes
+            f"/v1/models/{model}/generate",
+            f"/v1/models/{model}:predict",
+            f"/v1/models/{model}/infer",
+            f"/v1/models/{model}/predict",
+            "/v1/generate",
+            "/generate",
+            "/v1/predict",
+            "/predict",
+            f"/models/{model}",
+        ]
+
+        headers = {"Content-Type": "application/json"}
+        if hf_key:
+            headers["Authorization"] = f"Bearer {hf_key}"
+
+        last_exc = None
+        for ep in endpoints:
+            url = base.rstrip("/") + ep
+            # Try a few payload shapes: HF inference-like and TGI-like
+            payloads = []
+            payloads.append({"inputs": user_prompt, "parameters": {"max_new_tokens": 256, "temperature": float(temperature)}})
+            payloads.append({"inputs": user_prompt})
+            payloads.append({"model": model, "inputs": user_prompt, "parameters": {"max_new_tokens": 256}})
+
+            for payload in payloads:
+                try:
+                    try:
+                        logger.debug("HF HTTP POST %s payload=%s", url, json.dumps(payload, ensure_ascii=False))
+                    except Exception:
+                        logger.debug("HF HTTP POST %s (payload not JSON-serializable)", url)
+
+                    resp = requests.post(url, headers=headers, json=payload, timeout=15)
+
+                    try:
+                        body_preview = resp.text[:2000]
+                        logger.debug("HF HTTP RESPONSE %s status=%s body=%s", url, resp.status_code, body_preview)
+                    except Exception:
+                        logger.debug("HF HTTP RESPONSE %s status=%s (body unavailable)", url, resp.status_code)
+
+                    if resp.status_code != 200:
+                        last_exc = RuntimeError(f"{url} returned {resp.status_code}: {resp.text}")
+                        continue
+
+                    # Try to interpret common HF response shapes
+                    text = None
+                    try:
+                        j = resp.json()
+                        # HF Inference API often returns {'generated_text': '...'} or a list of dicts
+                        if isinstance(j, dict):
+                            if 'generated_text' in j:
+                                text = j['generated_text']
+                            elif 'results' in j and isinstance(j['results'], list) and len(j['results'])>0:
+                                # e.g., TGI returns {'results':[{'generated_text': '...'}]}
+                                parts = []
+                                for it in j['results']:
+                                    if isinstance(it, dict) and 'generated_text' in it:
+                                        parts.append(it['generated_text'])
+                                text = '\n'.join(parts) if parts else None
+                            elif 'outputs' in j:
+                                # some servers return outputs array
+                                try:
+                                    if isinstance(j['outputs'], list):
+                                        text = '\n'.join([o.get('generated_text') or str(o) for o in j['outputs']])
+                                except Exception:
+                                    text = None
+                            elif 'result' in j:
+                                # fallback to earlier pattern
+                                if isinstance(j['result'], list) and len(j['result'])>0:
+                                    parts = []
+                                    for item in j['result']:
+                                        if isinstance(item, dict) and 'content' in item:
+                                            parts.append(item['content'])
+                                    text = '\n'.join(parts)
+                            elif 'error' in j:
+                                last_exc = RuntimeError(f"HF server error: {j.get('error')}")
+                                continue
+                        elif isinstance(j, list):
+                            # list of generations
+                            parts = []
+                            for it in j:
+                                if isinstance(it, dict) and 'generated_text' in it:
+                                    parts.append(it['generated_text'])
+                            text = '\n'.join(parts) if parts else None
+
+                        if text is None:
+                            text = resp.text
+
+                        parsed = _safe_extract_json(text)
+                        if isinstance(parsed, (dict, list)):
+                            return json.dumps(parsed)
+                        return text
+                    except ValueError:
+                        text = resp.text
+                        parsed = _safe_extract_json(text)
+                        if isinstance(parsed, (dict, list)):
+                            return json.dumps(parsed)
+                        return text
+                except Exception as e:
+                    logger.exception("HF HTTP attempt to %s failed: %s", url, e)
+                    last_exc = e
+                    continue
+        raise RuntimeError(f"HuggingFace/local LLM call failed: {last_exc}")
 
     # If OpenAI is available and API key set, call it
     api_key = os.getenv("OPENAI_API_KEY")

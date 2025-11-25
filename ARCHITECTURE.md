@@ -13,7 +13,7 @@ Users upload:
 Data is loaded into Pandas for preprocessing.
 ---
 
-## 2. LLM Layer (OpenAI / Mock Mode)
+## 2. LLM Layer (OpenAI / Ollama / Mock Mode)
 The LLM analyzes applicant free-text fields:
 
 - Sentiment  
@@ -23,7 +23,13 @@ The LLM analyzes applicant free-text fields:
 - Credibility signals  
 
 Outputs are cached to:
-backend/artifacts/llm_cache.json
+`backend/artifacts/llm_cache.json`
+
+This layer supports multiple provider modes:
+
+- `openai`: calls the OpenAI API (when `LLM_PROVIDER=openai`).
+- `ollama`: calls a local Ollama-compatible HTTP gateway (when `LLM_PROVIDER=ollama` and `LOCAL_LLM_URL` is set). The handler will try common Ollama endpoints and payload shapes to be robust across gateway versions.
+- `mock`: deterministic on-disk responses used for judged demos and offline testing.
 
 This ensures:
 - Determinism  
