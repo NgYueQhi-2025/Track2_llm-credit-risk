@@ -47,6 +47,8 @@ def fake_model_predict(df: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> None:
     st.title("LLM Credit Risk — Demo UI")
+    if "model_results" not in st.session_state:
+        st.session_state["model_results"] = None
 
     # Sidebar: upload, demo selector, run
     with st.sidebar:
@@ -85,12 +87,19 @@ def main() -> None:
     with right:
         st.subheader("Explanations & Story")
         selected_id = st.number_input("Select applicant id", min_value=0, value=int(df['id'].iat[0]) if not df.empty else 0)
+
+        # If we have run the model, use the results with scores. Otherwise, use raw data.
+        if st.session_state["model_results"] is not None:
+            active_df = st.session_state["model_results"]
+        else:
+            active_df = df
+            
         st.markdown("**Local Explanation**")
         # Show a live preview explanation for the selected applicant even before running the full pipeline.
         preview_explanation = None
-        if selected_id is not None and not df.empty:
+        if selected_id is not None and not active_df.empty:
             try:
-                preview_row = df[df['id'] == int(selected_id)].reset_index(drop=True)
+                preview_row = active_df[active_df['id'] == int(selected_id)].reset_index(drop=True)
                 if not preview_row.empty:
                     r = preview_row.iloc[0]
                     # Prefer any already-computed summary field
@@ -208,6 +217,7 @@ def main() -> None:
                         pred = integrations.predict(feat)
                         merged = {**feat, **pred}
                         preds_rows.append(merged)
+                    # convert to DataFrame
 
                     preds_df = pd.DataFrame(preds_rows)
                     # join on applicant id where possible
@@ -221,6 +231,7 @@ def main() -> None:
                         out_df = df.merge(preds_df, on="id", how="left")
                     else:
                         out_df = pd.concat([df.reset_index(drop=True), preds_df.reset_index(drop=True)], axis=1)
+                    st.session_state["model_results"] = out_df
                     progress.progress(100)
                 st.success("Completed model run")
                 # update KPI
@@ -271,13 +282,54 @@ def main() -> None:
                         else:
                             recommendation = "Low risk — standard processing recommended."
 
-                        local_explanation = (
-                            f"Summary: {summary_text}\n\n"
-                            f"Signals:\n- Sentiment score: {sent_score}\n- Risk phrases: {risky_text or 'None'}\n- Risk score: {risk_score} ({risk_label})\n\n"
-                            f"Recommendation: {recommendation}"
-                        )
+                        # --- REPLACEMENT CODE START ---
+                        # 1. Show the Text Summary
+                        st.markdown("#### ➤ Applicant Profile Summary")
+                        st.info(summary_text or "No summary available for this applicant.")
 
-                        st.markdown(ui_helpers.highlight_snippet(local_explanation), unsafe_allow_html=True)
+                        # 2. Show Key Metrics in Columns
+                        st.markdown("#### ➤ Key Risk Signals")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Risk Score", f"{float(risk_score):.2f}", delta="-High" if float(risk_score) > 0.5 else "Low", delta_color="inverse")
+                        with col2:
+                            st.metric("Sentiment", f"{float(sent_score):.2f}" if sent_score is not None else "N/A")
+                        with col3:
+                            # Count the phrases if it's a list, otherwise just show 0
+                            count = len(risky_val) if isinstance(risky_val, list) else 0
+                            st.metric("Risk Flags", count, delta="Flags" if count > 0 else "Clean", delta_color="inverse")
+
+                        # 3. Show Risky Phrases (if any)
+                        if risky_text and risky_text != "None":
+                            st.caption("🚩 **Detected Risk Phrases:**")
+                            st.warning(risky_text)
+
+                        st.markdown("---")
+
+                        # 4. Color-Coded Final Recommendation
+                        st.markdown("#### ➤ Recommendation")
+
+                        # Determine color and icon based on score
+                        if rnum is None:
+                            st.warning("⚠️ No score available. Please run the model.")
+                        elif rnum >= 0.7:
+                            st.error(
+                                f"**🔴 DECLINE / MANUAL REVIEW**\n\n"
+                                f"This applicant is flagged as **High Risk** ({int(rnum*100)}%). "
+                                "Recommendation: Escalate to senior underwriter immediately."
+                            )
+                        elif rnum >= 0.4:
+                            st.warning(
+                                f"**🟡 CONDITIONAL APPROVAL**\n\n"
+                                f"This applicant is **Medium Risk** ({int(rnum*100)}%). "
+                                "Recommendation: Request additional documentation (payslips/bank statements)."
+                            )
+                        else:
+                            st.success(
+                                f"**🟢 APPROVE**\n\n"
+                                f"This applicant is **Low Risk** ({int(rnum*100)}%). "
+                                "Recommendation: Proceed with standard automated approval."
+                            )
 
                         # Story Playback: use the local explanation and signals
                         if play_clicked:
