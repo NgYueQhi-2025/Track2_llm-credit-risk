@@ -7,8 +7,8 @@ import pandas as pd
 import streamlit as st
 
 
-from backend import ui_helpers
-from backend import integrations
+import ui_helpers
+import integrations
 
 
 st.set_page_config(page_title="LLM Credit Risk — Demo", layout="wide")
