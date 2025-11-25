@@ -183,7 +183,21 @@ def main() -> None:
                         res = integrations.run_feature_extraction(row.to_dict(), mock=mock_mode)
                         features = res.get("features", {})
                         # keep parsed for UI explanations
-                        features["_parsed"] = res.get("parsed", {})
+                        parsed = res.get("parsed", {})
+                        features["_parsed"] = parsed
+                        # normalize parsed into flat fields for display and merging
+                        try:
+                            norm = integrations.expand_parsed_to_fields(parsed)
+                        except Exception:
+                            norm = {}
+                        # copy normalized known fields into features (do not overwrite existing numeric features)
+                        for k, v in norm.items():
+                            # use a slightly different key for phrases list
+                            if k == 'risky_phrases':
+                                features['risky_phrases_list'] = v
+                            else:
+                                if k not in features or features.get(k) is None:
+                                    features[k] = v
                         features_list.append(features)
                         rows.append(row.to_dict())
                     progress.progress(90)

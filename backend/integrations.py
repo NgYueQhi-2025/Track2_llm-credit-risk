@@ -184,6 +184,79 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
     return {"parsed": parsed, "features": features}
 
 
+def expand_parsed_to_fields(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a parsed LLM output into flat fields used by the app/UI.
+
+    Returns a dict with keys:
+      - summary: text or None
+      - sentiment_score: float
+      - risky_phrases: list
+      - risky_phrase_count: int
+      - contradiction_flag: int
+      - credibility_score: float
+    """
+    out = {
+        "summary": None,
+        "sentiment_score": None,
+        "risky_phrases": None,
+        "risky_phrase_count": None,
+        "contradiction_flag": None,
+        "credibility_score": None,
+    }
+    if not isinstance(parsed, dict):
+        return out
+
+    # summary
+    summary = parsed.get("summary")
+    if isinstance(summary, dict):
+        out["summary"] = summary.get("summary")
+    elif isinstance(summary, str):
+        out["summary"] = summary
+
+    # sentiment
+    sent = parsed.get("sentiment")
+    if isinstance(sent, dict):
+        try:
+            out["sentiment_score"] = float(sent.get("score", None))
+        except Exception:
+            out["sentiment_score"] = None
+    elif isinstance(sent, (int, float)):
+        out["sentiment_score"] = float(sent)
+
+    # risky phrases
+    risky = parsed.get("extract_risky") or parsed.get("risky")
+    if isinstance(risky, dict):
+        rp = risky.get("risky_phrases") or risky.get("phrases") or []
+        if isinstance(rp, str):
+            # try to parse comma-separated string
+            rp_list = [p.strip() for p in rp.split(",") if p.strip()]
+        elif isinstance(rp, (list, tuple)):
+            rp_list = list(rp)
+        else:
+            rp_list = []
+        out["risky_phrases"] = rp_list
+        try:
+            out["risky_phrase_count"] = int(risky.get("count", len(rp_list)))
+        except Exception:
+            out["risky_phrase_count"] = len(rp_list)
+
+    # contradictions
+    contra = parsed.get("detect_contradictions") or parsed.get("contradictions")
+    if isinstance(contra, dict):
+        out["contradiction_flag"] = int(contra.get("flag", 0)) if contra.get("flag") is not None else (1 if contra.get("contradictions") else 0)
+
+    # credibility score fallback (if present in parsed features)
+    if out.get("credibility_score") is None:
+        # try to derive from summary confidence if available
+        if isinstance(summary, dict) and summary.get("confidence") is not None:
+            try:
+                out["credibility_score"] = max(0.0, min(1.0, float(summary.get("confidence", 0.0))))
+            except Exception:
+                out["credibility_score"] = None
+
+    return out
+
+
 def predict(features: Dict[str, Any]) -> Dict[str, Any]:
     """Given a features mapping, return a predicted risk score and label.
 

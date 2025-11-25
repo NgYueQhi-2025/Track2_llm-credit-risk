@@ -53,6 +53,103 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
             return json.dumps({"sentiment": "neutral", "score": 0.05})
         return json.dumps({"raw": "mocked"})
 
+    # If a specific provider is requested, handle it (e.g. 'ollama')
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+
+    # If provider explicitly set to 'ollama' (local server), attempt HTTP calls
+    if provider in ("ollama", "ollema", "local", "ollama_http"):
+        # Try to use requests to call a local Ollama-like HTTP server.
+        try:
+            import requests
+            _REQUESTS_AVAILABLE = True
+        except Exception:
+            _REQUESTS_AVAILABLE = False
+
+        if not _REQUESTS_AVAILABLE:
+            raise RuntimeError("LLM provider 'ollama' selected but the 'requests' package is not installed.")
+
+        base = os.getenv("LOCAL_LLM_URL", "http://localhost:11434")
+        model = os.getenv("OLLAMA_MODEL", os.getenv("OPENAI_MODEL", "llama2"))
+        # Build simple prompts per mode
+        if mode == "summary":
+            user_prompt = (
+                f"Analyze the applicant data and return JSON like: {json.dumps({'summary': '...', 'confidence': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "extract_risky":
+            user_prompt = (
+                f"Extract risky phrases. Return JSON like: {json.dumps({'risky_phrases': ['...'], 'count': 0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "detect_contradictions":
+            user_prompt = (
+                f"Detect contradictions. Return JSON like: {json.dumps({'contradictions': ['...'], 'flag': 0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "sentiment":
+            user_prompt = (
+                f"Return sentiment. JSON like: {json.dumps({'sentiment': 'neutral', 'score': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        else:
+            user_prompt = f"Analyze input and return JSON. Input:\n{prompt}\n\nReturn only JSON."
+
+        # Try a few common Ollama/OpenAI-compatible endpoints
+        endpoints = ["/generate", "/api/generate", "/chat", "/api/chat", "/v1/chat/completions"]
+        headers = {"Content-Type": "application/json"}
+        last_exc = None
+        for ep in endpoints:
+            url = base.rstrip("/") + ep
+            payloads = []
+            # Different servers expect different payload shapes; try a few
+            # Ollama-like: {"model": "<model>", "prompt": "..."}
+            payloads.append({"model": model, "prompt": user_prompt})
+            # OpenAI-compatible chat: {"model":"<model>", "messages":[{"role":"user","content":"..."}]}
+            payloads.append({"model": model, "messages": [{"role": "user", "content": user_prompt}], "temperature": temperature})
+
+            for payload in payloads:
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=10)
+                    if resp.status_code != 200:
+                        last_exc = RuntimeError(f"{url} returned {resp.status_code}: {resp.text}")
+                        continue
+                    # Try to parse common response shapes
+                    text = None
+                    try:
+                        j = resp.json()
+                        # Ollama sometimes returns {"result": [{"content":"..."}], ...}
+                        if isinstance(j, dict) and "result" in j:
+                            if isinstance(j["result"], list) and len(j["result"])>0:
+                                # join content fields
+                                parts = []
+                                for item in j["result"]:
+                                    if isinstance(item, dict) and "content" in item:
+                                        parts.append(item["content"])
+                                text = "\n".join(parts)
+                        # OpenAI-like: {'choices':[{'message':{'content':'...'}}]}
+                        if text is None and isinstance(j, dict) and "choices" in j:
+                            try:
+                                text = j["choices"][0]["message"]["content"]
+                            except Exception:
+                                try:
+                                    text = j["choices"][0]["text"]
+                                except Exception:
+                                    text = None
+                        # direct text field
+                        if text is None and isinstance(j, dict) and "text" in j:
+                            text = j["text"]
+                        # last resort: raw text
+                        if text is None:
+                            text = resp.text
+
+                        parsed = _safe_extract_json(text)
+                        if isinstance(parsed, (dict, list)):
+                            return json.dumps(parsed)
+                        return text
+                    except ValueError:
+                        # not json, try raw text
+                        text = resp.text
+                        parsed = _safe_extract_json(text)
+                        if isinstance(parsed, (dict, list)):
+                            return json.dumps(parsed)
+                        return text
+                except Exception as e:
+                    last_exc = e
+                    continue
+        raise RuntimeError(f"Ollama/local LLM call failed: {last_exc}")
+
     # If OpenAI is available and API key set, call it
     api_key = os.getenv("OPENAI_API_KEY")
     if _OPENAI_AVAILABLE and api_key:
@@ -124,7 +221,7 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
         raise RuntimeError(f"LLM provider call failed: {last_exc}")
 
     # If no provider available, raise with guidance
-    raise RuntimeError("No LLM provider available. Set OPENAI_API_KEY and install openai, or run in mock mode.")
+    raise RuntimeError("No LLM provider available. Set OPENAI_API_KEY and install openai, or set LLM_PROVIDER='ollama' and run a local Ollama-compatible server, or run in mock mode.")
 
 
 if __name__ == '__main__':
