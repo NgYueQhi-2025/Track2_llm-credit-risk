@@ -34,13 +34,14 @@ def _safe_extract_json(text: str) -> Any:
     except Exception:
         return s
 
-
-def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_cache: bool = True, mock: bool = True) -> str:
+# CORRECTION 1: Changed default mock=True to mock=False
+def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_cache: bool = True, mock: bool = False) -> str:
     """Call an LLM to perform a specific extraction `mode`.
 
     If `mock` is True, returns canned responses useful for offline testing.
     If an OpenAI API key is present and the openai package is installed, calls OpenAI ChatCompletion.
     The function returns the raw string output (usually JSON)."""
+    
     # Mock responses for development and offline demos
     if mock:
         if mode == "summary":
@@ -53,8 +54,8 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
             return json.dumps({"sentiment": "neutral", "score": 0.05})
         return json.dumps({"raw": "mocked"})
 
-    # If a specific provider is requested, handle it (e.g. 'ollama')
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    # CORRECTION 2: Default to 'ollama' if 'openai' isn't explicitly set, helpful for your local setup
+    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
 
     # If provider explicitly set to 'ollama' (local server), attempt HTTP calls
     if provider in ("ollama", "ollema", "local", "ollama_http"):
@@ -101,7 +102,7 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
 
             for payload in payloads:
                 try:
-                    resp = requests.post(url, headers=headers, json=payload, timeout=10)
+                    resp = requests.post(url, headers=headers, json=payload, timeout=30) # Increased timeout slightly
                     if resp.status_code != 200:
                         last_exc = RuntimeError(f"{url} returned {resp.status_code}: {resp.text}")
                         continue
@@ -227,4 +228,5 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
 if __name__ == '__main__':
     # quick local test
     prompt = "Name: Test; free_text: I run a small cafe and sometimes miss payments"
-    print(call_llm(prompt, mode='summary', mock=True))
+    # Added mock=False to test actual connection in main block
+    print(call_llm(prompt, mode='summary', mock=False))
