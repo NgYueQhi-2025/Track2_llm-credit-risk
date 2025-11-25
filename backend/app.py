@@ -208,8 +208,6 @@ def main() -> None:
                         pred = integrations.predict(feat)
                         merged = {**feat, **pred}
                         preds_rows.append(merged)
-                    # convert to DataFrame
-                    import pandas as pd
 
                     preds_df = pd.DataFrame(preds_rows)
                     # join on applicant id where possible
