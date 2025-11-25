@@ -55,6 +55,34 @@ def load_demo_data(name: str) -> pd.DataFrame:
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
+
+def extract_text_from_file(uploaded_file) -> str:
+    """Mock extractor for PDFs/images. Returns short preview text.
+
+    Replace this with real OCR/PDF parsing in production.
+    """
+    try:
+        name = getattr(uploaded_file, "name", "uploaded_file")
+        # Try to read text content if possible
+        try:
+            uploaded_file.seek(0)
+            raw = uploaded_file.read()
+            if isinstance(raw, bytes):
+                try:
+                    content = raw.decode("utf-8")
+                except Exception:
+                    content = None
+            else:
+                content = str(raw)
+        except Exception:
+            content = None
+
+        if content:
+            return (content[:300] + "...") if len(content) > 300 else content
+        return f"[Mock extracted text from {name}]"
+    except Exception:
+        return ""
+
 def main() -> None:
     st.title("LLM Credit Risk — Demo UI")
     
@@ -92,20 +120,44 @@ def main() -> None:
             )
         # ------------------------------------
 
-        uploaded = st.file_uploader("Upload applicants CSV", type=["csv"])
-        demo = st.selectbox("Or choose a demo dataset", ["Demo A", "Demo B"])
+        uploaded_files = st.file_uploader(
+            "Click to upload or drag and drop",
+            type=["csv", "pdf", "png", "jpg", "jpeg"],
+            accept_multiple_files=True,
+        )
+
+        st.markdown("---")
+        st.subheader("Applicant scope")
+        applicant_scope = st.selectbox("Who are you uploading?", ["Individuals", "Businesses", "Both"], index=0)
+
+        demo = st.selectbox("Or choose a demo dataset", ["Demo A", "Demo B"])     
         mock_mode = st.checkbox("Mock mode (no LLM/API)", value=True)
         run_button = st.button("Run Model", type="primary")
         st.markdown("---")
         st.caption("Tip: use the demo dataset for fastest demo flow.")
 
-    # Load data
-    if uploaded is not None:
-        try:
-            df = pd.read_csv(uploaded)
-        except Exception as e:
-            st.error(f"Failed to read CSV: {e}")
-            df = pd.DataFrame()
+    # Load data: prefer CSV if provided, otherwise build from uploaded docs or demo
+    if 'uploaded_files' in locals() and uploaded_files:
+        csvs = [f for f in uploaded_files if str(f.name).lower().endswith('.csv')]
+        if csvs:
+            try:
+                csvs[0].seek(0)
+                df = pd.read_csv(csvs[0])
+            except Exception as e:
+                st.error(f"Failed to read CSV: {e}")
+                df = pd.DataFrame()
+        else:
+            rows = []
+            for f in uploaded_files:
+                text = extract_text_from_file(f)
+                rows.append({
+                    'id': f.name,
+                    'name': f.name,
+                    'income': None,
+                    'credit_score': None,
+                    'text_notes': text,
+                })
+            df = pd.DataFrame(rows)
     else:
         df = load_demo_data(demo)
 
