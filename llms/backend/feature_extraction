@@ -62,3 +62,28 @@ if __name__ == '__main__':
 	row = map_parsed_to_features('app_001', parsed)
 	save_feature_row(row)
 	print('Saved demo row to', FEATURES_PATH)
+
+# backend/feature_extraction.py
+from transformers import pipeline
+
+# 1. Load a specialist model from Hugging Face (Runs locally, no internet needed after first run)
+# "FinBERT" is capable of understanding financial context better than generic models.
+sentiment_analyzer = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+
+def extract_features(llm_output_text, metadata):
+    # ... (existing parsing logic for risky phrases etc) ...
+
+    # 2. Use Hugging Face for the specific task of Sentiment
+    # This is much faster than an LLM call!
+    hf_result = sentiment_analyzer(llm_output_text[:512])[0] # Limit to 512 tokens
+    
+    # Map FinBERT output (positive/negative/neutral) to your score
+    score_map = {"positive": 1.0, "neutral": 0.5, "negative": 0.0}
+    sentiment_score = score_map.get(hf_result['label'], 0.5)
+
+    return {
+        "risky_phrase_count": ..., 
+        "sentiment_score": sentiment_score, # Now comes from Hugging Face
+        "contradiction_flag": ...,
+        "credibility_score": ...
+    }
