@@ -26,40 +26,13 @@ def health():
 def llm_test():
     data = request.json
     text = data.get("text", "")
-from flask import Flask, request, jsonify
-from backend.llm_handler import call_llm
-from backend.feature_extraction import extract_features
-from backend.train_model import train_model
-import joblib
-import os
-
-app = Flask(__name__)
-
-MODEL_PATH = "artifacts/model.pkl"
-SCALER_PATH = "artifacts/scaler.pkl"
-
-
-# ------------------------------------------------------------
-# Health Check
-# ------------------------------------------------------------
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok", "message": "API is running"}), 200
-
-
-# ------------------------------------------------------------
-# Test LLM Integration (Useful for debugging)
-# ------------------------------------------------------------
-@app.route("/llm-test", methods=["POST"])
-def llm_test():
-    data = request.json
-    text = data.get("text", "")
 
     if not text:
         return jsonify({"error": "Missing 'text' in request"}), 400
 
     try:
-        response = call_llm(prompt=text, mode="summary", temperature=0)
+        # CORRECTION: Added mock=False
+        response = call_llm(prompt=text, mode="summary", temperature=0, mock=False)
         return jsonify({"llm_output": response}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -79,7 +52,8 @@ def extract_features_api():
         return jsonify({"error": "Missing 'text'"}), 400
 
     try:
-        llm_output = call_llm(prompt=text, mode="summary", temperature=0)
+        # CORRECTION: Added mock=False
+        llm_output = call_llm(prompt=text, mode="summary", temperature=0, mock=False)
         features = extract_features(llm_output, metadata)
 
         return jsonify({"features": features}), 200
@@ -109,7 +83,8 @@ def score():
 
     try:
         # Step 2: LLM → features
-        llm_output = call_llm(prompt=text, mode="summary", temperature=0)
+        # CORRECTION: Added mock=False
+        llm_output = call_llm(prompt=text, mode="summary", temperature=0, mock=False)
         features_dict = extract_features(llm_output, metadata)
 
         # Convert dict → list in consistent feature order
