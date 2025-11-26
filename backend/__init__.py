@@ -5,3 +5,4 @@ when running the Streamlit app. It's intentionally empty.
 """
 
 __all__ = ["app", "ui_helpers", "integrations"]
+__version__ = '0.0.1'
