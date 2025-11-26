@@ -4,3 +4,4 @@ scikit-learn
 pandas
 joblib
 numpy
+google-genai>=0.14.0
