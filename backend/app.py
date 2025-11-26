@@ -99,96 +99,44 @@ def convert_df_to_csv(df):
 
 
 def extract_text_from_file(uploaded_file) -> str:
-    """Try to extract text from uploaded files.
-
-    - For PDFs: use `pdfplumber` when available.
-    - For images: use `pytesseract` + `Pillow` when available.
-    - Fallback: attempt to decode raw bytes or return a short placeholder.
+    """
+    Uses the Gemini API to extract text from multimodal files (PDF/Image).
+    
+    Replaces local parsing (pdfplumber, pytesseract) with a robust LLM call.
     """
     name = getattr(uploaded_file, "name", "uploaded_file")
+    
+    # 1. Reset the file pointer and read the raw bytes
     try:
         uploaded_file.seek(0)
-    except Exception:
-        pass
-
-    # Try PDF parsing first
-    try:
-        import pdfplumber
-
+        file_bytes = uploaded_file.read()
+    except Exception as e:
+        return f"[File Read Error for {name}: {e}]"
+        
+    # 2. Determine MIME type
+    mime_type = uploaded_file.type
+    
+    # Check if the file is a document that requires Gemini analysis
+    if mime_type in ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg']:
+        # 3. Call the new Gemini-based analysis function
+        # This function handles the upload, analysis, and cleanup.
+        result_text = integrations.analyze_file_with_gemini(
+            file_bytes=file_bytes,
+            file_name=name,
+            mime_type=mime_type,
+        )
+        return result_text
+        
+    # 4. Handle plain CSV files (which should be read by pd.read_csv anyway)
+    elif mime_type == 'text/csv':
         try:
-            uploaded_file.seek(0)
-            with pdfplumber.open(uploaded_file) as pdf:
-                texts = []
-                for page in pdf.pages:
-                    try:
-                        t = page.extract_text() or ""
-                        texts.append(t)
-                    except Exception:
-                        continue
-                content = "\n\n".join([t for t in texts if t])
-                if content:
-                    return (content[:2000] + "...") if len(content) > 2000 else content
+            # Fallback to simple decoding if this CSV bypassed the main CSV handler
+            return file_bytes.decode("utf-8", errors="ignore")[:300]
         except Exception:
-            # If pdfplumber fails on this file, continue to other methods
-            pass
-    except Exception:
-        # pdfplumber not installed; skip PDF parsing
-        pass
-
-    # Try image OCR
-    try:
-        from PIL import Image
-        import pytesseract
-
-        # Auto-detect tesseract binary if available (useful on Windows)
-        def _find_tesseract_cmd() -> str | None:
-            # 1) In PATH
-            p = shutil.which("tesseract")
-            if p:
-                return p
-            # 2) Common Windows install locations
-            candidates = [
-                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-            ]
-            for c in candidates:
-                if Path(c).exists():
-                    return c
-            return None
-
-        try:
-            tcmd = _find_tesseract_cmd()
-            if tcmd:
-                pytesseract.pytesseract.tesseract_cmd = tcmd
-
-            uploaded_file.seek(0)
-            img = Image.open(uploaded_file)
-            text = pytesseract.image_to_string(img)
-            if text and text.strip():
-                return (text[:2000] + "...") if len(text) > 2000 else text
-        except Exception:
-            pass
-    except Exception:
-        # OCR deps not installed; skip image OCR
-        pass
-
-    # Fallback: try to decode bytes or return placeholder
-    try:
-        uploaded_file.seek(0)
-        raw = uploaded_file.read()
-        if isinstance(raw, bytes):
-            try:
-                content = raw.decode("utf-8", errors="ignore")
-            except Exception:
-                content = None
-        else:
-            content = str(raw)
-    except Exception:
-        content = None
-
-    if content:
-        return (content[:300] + "...") if len(content) > 300 else content
-    return f"[Extracted text unavailable for {name}]"
+            return f"[CSV file {name} skipped text extraction]"
+            
+    # 5. Fallback for unexpected types
+    return f"[Analysis Skipped: Unsupported file type {mime_type} for {name}]"
 
 def main() -> None:
     # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
