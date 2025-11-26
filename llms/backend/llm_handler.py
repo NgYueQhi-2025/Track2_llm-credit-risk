@@ -4,12 +4,28 @@ import time
 import logging
 from typing import Any
 
+# --- LLM Provider Imports ---
 _OPENAI_AVAILABLE = False
 try:
     import openai
     _OPENAI_AVAILABLE = True
 except Exception:
     openai = None
+
+_GEMINI_AVAILABLE = False
+try:
+    from google import genai
+    from google.genai.errors import APIError
+    _GEMINI_AVAILABLE = True
+    # Initialize client early. The SDK automatically reads the GEMINI_API_KEY env var.
+    try:
+        genai.configure()
+        GEMINI_CLIENT = genai.Client()
+    except Exception as e:
+        logging.warning(f"Could not initialize Gemini Client: {e}")
+        GEMINI_CLIENT = None
+except Exception:
+    GEMINI_CLIENT = None
 
 
 def _safe_extract_json(text: str) -> Any:
@@ -35,14 +51,13 @@ def _safe_extract_json(text: str) -> Any:
     except Exception:
         return s
 
-# CORRECTION 1: Changed default mock=True to mock=False
+
 def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_cache: bool = True, mock: bool = False) -> str:
     """Call an LLM to perform a specific extraction `mode`.
 
     If `mock` is True, returns canned responses useful for offline testing.
-    If an OpenAI API key is present and the openai package is installed, calls OpenAI ChatCompletion.
     The function returns the raw string output (usually JSON)."""
-    
+
     # Mock responses for development and offline demos
     if mock:
         if mode == "summary":
@@ -62,10 +77,70 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
     logger.setLevel(logging.DEBUG)
 
     # Default provider: prefer local Ollama-like gateways for developer flow,
-    # but allow explicit override via LLM_PROVIDER (e.g. 'openai' or 'huggingface').
+    # but allow explicit override via LLM_PROVIDER (e.g. 'openai' or 'huggingface' or 'gemini').
     provider = os.getenv("LLM_PROVIDER", "ollama").lower()
 
-    # If provider explicitly set to 'ollama' (local server), attempt HTTP calls
+    # --- GEMINI / GOOGLE AI PROVIDER ---
+    # This block is added to ensure priority for the target API if configured.
+    if provider in ("gemini", "google", "google_ai") and GEMINI_CLIENT:
+        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        
+        system_instruction = (
+            "You are a credit-risk feature extractor. Return only a single JSON object with the exact schema requested. "
+            "Do not add any commentary or surrounding text. Your response must be valid, complete JSON."
+        )
+
+        # Build simple prompts per mode
+        if mode == "summary":
+            user_prompt = (
+                f"Analyze the applicant data and return JSON like: {json.dumps({'summary': '...', 'confidence': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "extract_risky":
+            user_prompt = (
+                f"Extract risky phrases. Return JSON like: {json.dumps({'risky_phrases': ['...'], 'count': 0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "detect_contradictions":
+            user_prompt = (
+                f"Detect contradictions. Return JSON like: {json.dumps({'contradictions': ['...'], 'flag': 0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        elif mode == "sentiment":
+            user_prompt = (
+                f"Return sentiment. JSON like: {json.dumps({'sentiment': 'neutral', 'score': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
+        else:
+            user_prompt = f"Analyze input and return JSON. Input:\n{prompt}\n\nReturn only JSON."
+
+        # Retry/backoff
+        last_exc = None
+        for attempt in range(3):
+            try:
+                # Use the client initialized at the module level
+                response = GEMINI_CLIENT.models.generate_content(
+                    model=model,
+                    contents=[
+                        genai.types.Content(role="user", parts=[genai.types.Part.from_text(user_prompt)]),
+                    ],
+                    config=genai.types.GenerateContentConfig(
+                        temperature=temperature,
+                        system_instruction=system_instruction
+                    )
+                )
+
+                out = response.text
+                parsed = _safe_extract_json(out)
+                if isinstance(parsed, (dict, list)):
+                    return json.dumps(parsed)
+                return out
+
+            except APIError as e:
+                last_exc = e
+                logger.error(f"Gemini API call failed (attempt {attempt+1}): {e}")
+                time.sleep(0.5 * (2 ** attempt))
+            except Exception as e:
+                last_exc = e
+                logger.exception(f"Gemini call failed (attempt {attempt+1}): {e}")
+                time.sleep(0.5 * (2 ** attempt))
+        
+        if last_exc:
+            raise RuntimeError(f"Gemini LLM provider call failed after 3 attempts: {last_exc}")
+
+    # --- OLLAMA / LOCAL HTTP PROVIDER ---
     if provider in ("ollama", "ollema", "local", "ollama_http"):
         # Try to use requests to call a local Ollama-like HTTP server.
         try:
@@ -79,6 +154,7 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
 
         base = os.getenv("LOCAL_LLM_URL", "http://localhost:11434")
         model = os.getenv("OLLAMA_MODEL", os.getenv("OPENAI_MODEL", "llama2"))
+        
         # Build simple prompts per mode
         if mode == "summary":
             user_prompt = (
@@ -109,12 +185,13 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
             payloads.append({"model": model, "messages": [{"role": "user", "content": user_prompt}], "temperature": temperature})
 
             for payload in payloads:
-                    # Debug: log the outgoing attempt
-                    try:
-                        logger.debug("LLM HTTP POST %s payload=%s", url, json.dumps(payload, ensure_ascii=False))
-                    except Exception:
-                        logger.debug("LLM HTTP POST %s (payload not JSON-serializable)", url)
+                # Debug: log the outgoing attempt
+                try:
+                    logger.debug("LLM HTTP POST %s payload=%s", url, json.dumps(payload, ensure_ascii=False))
+                except Exception:
+                    logger.debug("LLM HTTP POST %s (payload not JSON-serializable)", url)
 
+                try:
                     # Use a slightly increased timeout to accommodate local dev boxes
                     resp = requests.post(url, headers=headers, json=payload, timeout=30)
 
@@ -174,7 +251,7 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
                     continue
         raise RuntimeError(f"Ollama/local LLM call failed: {last_exc}")
 
-    # If provider is Hugging Face (local TGI or HF Inference), attempt HTTP calls
+    # --- HUGGING FACE PROVIDER ---
     if provider in ("huggingface", "hf", "hugging_face"):
         try:
             import requests
@@ -189,7 +266,7 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
         model = os.getenv("HF_MODEL", os.getenv("OPENAI_MODEL", "gpt2"))
         hf_key = os.getenv("HF_API_KEY")
 
-        # Build simple prompts per mode (reuse same messages as other providers)
+        # Build simple prompts per mode
         if mode == "summary":
             user_prompt = (
                 f"Analyze the applicant data and return JSON like: {json.dumps({'summary': '...', 'confidence': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON.")
@@ -205,13 +282,11 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
         else:
             user_prompt = f"Analyze input and return JSON. Input:\n{prompt}\n\nReturn only JSON."
 
-        # Candidate endpoints for various HF-compatible servers (TGI, HF Inference, custom)
+        # Candidate endpoints for various HF-compatible servers
         endpoints = [
-            # Router-compatible endpoints (Hugging Face now prefers router.huggingface.co)
             f"/api/models/{model}/infer",
             f"/api/models/{model}/generate",
             f"/api/models/{model}/predict",
-            # Backwards-compatible HF shapes
             f"/v1/models/{model}/generate",
             f"/v1/models/{model}:predict",
             f"/v1/models/{model}/infer",
@@ -315,9 +390,9 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
                     continue
         raise RuntimeError(f"HuggingFace/local LLM call failed: {last_exc}")
 
-    # If OpenAI is available and API key set, call it
+    # --- OPENAI PROVIDER ---
     api_key = os.getenv("OPENAI_API_KEY")
-    if _OPENAI_AVAILABLE and api_key:
+    if provider in ("openai", "gpt") and _OPENAI_AVAILABLE and api_key:
         openai.api_key = api_key
         system = (
             "You are a credit-risk feature extractor. Return only a single JSON object with the exact schema requested. "
@@ -341,7 +416,7 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
                 f"Return sentiment. JSON like: {json.dumps({'sentiment': 'neutral', 'score': 0.0})}\n\nInput:\n{prompt}\n\nReturn only JSON."
             )
         else:
-            user = f"Analyze input and return JSON. Input:\n{prompt}\n\nReturn only JSON." 
+            user = f"Analyze input and return JSON. Input:\n{prompt}\n\nReturn only JSON."
 
         # Retry/backoff
         last_exc = None
@@ -383,10 +458,14 @@ def call_llm(prompt: str, mode: str = "summary", temperature: float = 0.0, use_c
             except Exception as e:
                 last_exc = e
                 time.sleep(0.5 * (2 ** attempt))
-        raise RuntimeError(f"LLM provider call failed: {last_exc}")
+        raise RuntimeError(f"OpenAI LLM provider call failed: {last_exc}")
 
     # If no provider available, raise with guidance
-    raise RuntimeError("No LLM provider available. Set OPENAI_API_KEY and install openai, or set LLM_PROVIDER='ollama' and run a local Ollama-compatible server, or run in mock mode.")
+    raise RuntimeError(
+        "No LLM provider available. Set GEMINI_API_KEY and install google-genai, "
+        "or set OPENAI_API_KEY and install openai, or set LLM_PROVIDER='ollama' "
+        "and run a local Ollama-compatible server, or run in mock mode."
+    )
 
 
 if __name__ == '__main__':
