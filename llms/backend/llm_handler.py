@@ -87,7 +87,8 @@ def call_llm(
 
     # Default provider: 'ollama' is the default fallback, which caused your error.
     # Set LLM_PROVIDER="gemini" in your secrets to force Gemini.
-    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+    provider = os.getenv("LLM_PROVIDER", "gemini").lower()
+    api_key = ${{ secrets.YOUR_KEY_NAME }}
 
     # --- GEMINI / GOOGLE AI PROVIDER ---
     if provider in ("gemini", "google", "google_ai") and GEMINI_CLIENT:
