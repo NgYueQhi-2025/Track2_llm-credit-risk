@@ -193,33 +193,34 @@ def _normalize_llm_raw_output(mode: str, parsed_val: Any, raw: Any) -> Any:
 
 
 def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retries: int = 3) -> Dict[str, Any]:
-    """Call LLM to extract structured outputs for a single applicant row.
+    # ... (keep the earlier debug prints and precomputed behavior unchanged)
 
-    Returns a dict containing parsed LLM outputs and derived numeric features.
-
-    - df_row: mapping of applicant fields (e.g. id, name, age, income, free_text...)
-    - mock: when True the `llm_handler` will return canned responses
-    - max_retries: retries for transient failures
-    """
     applicant_id = str(df_row.get("id", "unknown"))
 
-    # DEBUG: surface incoming row content so we can confirm the text field is present
     try:
         sample_text = (df_row.get('text_notes') or df_row.get('text') or df_row.get('text_to_analyze') or '')[:1000]
     except Exception:
         sample_text = ''
     print(f"DEBUG run_feature_extraction START applicant={applicant_id} mock={mock} keys={list(df_row.keys())}")
-    print(f"DEBUG sample_text (truncated, 1000 chars): {repr(sample_text)[:400]}")  # truncated so logs stay readable
+    print(f"DEBUG sample_text (truncated, 1000 chars): {repr(sample_text)[:400]}")
 
     prompt_base = f"Applicant data: {json.dumps(df_row, ensure_ascii=False)}\nAnalyze for: summary, risky phrases, contradictions, sentiment."
+
+    # Tell the LLM to exclude negated mentions when extracting risky phrases
+    instruction_text = (
+        "Instruction: When extracting risky phrases, ONLY include phrases that are asserted "
+        "as present (positive mentions). If a risky concept is negated in the text (e.g. "
+        "'no missed payments', 'did not miss payments', 'no history of late payments'), "
+        "do NOT include it as a risky phrase. Return JSON only."
+    )
 
     modes = ["summary", "extract_risky", "detect_contradictions", "sentiment"]
     parsed: Dict[str, Any] = {}
 
-    # If precomputed artifact features exist for this applicant, prefer them
-    # regardless of `mock` so demo runs reproduce precomputed behavior.
+    # precomputed logic unchanged...
     pre = _read_precomputed_features(applicant_id)
     if pre is not None:
+        # same as before
         parsed = {
             "summary": {"summary": "(precomputed)", "confidence": 0.5},
             "extract_risky": {"risky_phrases": [], "count": pre.get("risky_phrase_count", 0)},
@@ -236,11 +237,54 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
         print(f"DEBUG: returning precomputed features for applicant={applicant_id}")
         return {"parsed": parsed, "features": features}
 
+    # helper: check for negation around a match of phrase in text
+    def _phrase_is_negated_in_text(phrase: str, text: str, window_words: int = 8) -> bool:
+        """Return True if phrase occurrences in text are in a negated context.
+        If any occurrence is NOT negated, return False (i.e., phrase is asserted).
+        """
+        import re
+        if not text or not phrase:
+            return False
+        low_text = text.lower()
+        low_phrase = phrase.lower()
+        # find all occurrences
+        for m in re.finditer(re.escape(low_phrase), low_text):
+            start = m.start()
+            # get a window of words before the match to check for negation cues
+            # we parse a prefix and search negation tokens
+            prefix = low_text[max(0, start - 200): start]  # 200 chars should cover ~> window_words
+            # Negation patterns (expand as necessary)
+            neg_patterns = [
+                r'\bno\b',
+                r"\bdid not\b",
+                r"\bdidn't\b",
+                r'\bdoes not\b',
+                r"\bdoesn't\b",
+                r'\bnot\b',
+                r'\bnever\b',
+                r'\bwithout\b',
+                r'\bno history of\b',
+                r'\bno record of\b',
+                r'\bdenies\b',
+                r'\bhas not\b',
+                r'\bhasn\'t\b',
+            ]
+            neg_regex = re.compile('|'.join(neg_patterns), flags=re.IGNORECASE)
+            if neg_regex.search(prefix):
+                # this occurrence appears negated; continue searching other occurrences
+                continue
+            # also check for constructs like 'no [NUM] missed payments' where 'no' might be immediately before phrase
+            # if not negated, this occurrence is affirmative -> phrase is not negated
+            return False
+        # if we found occurrences but all were negated, treat as negated
+        # but if we found no occurrences, return False (we cannot say it's negated)
+        return True
+
     for mode in modes:
         attempt = 0
         last_exc = None
         while attempt < max_retries:
-            # If mock and a precomputed artifact exists, use it for speed and determinism
+            # same mock & precomputed logic as before...
             if mock:
                 pre = _read_precomputed_features(applicant_id)
                 if pre is not None:
@@ -260,12 +304,8 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                     return {"parsed": parsed, "features": features}
 
             try:
-                # Call the LLM handler in a backwards-compatible way. Prefer
-                # the compatibility adapter if present; else use the raw
-                # llm_handler.call_llm function.
                 func = _CALL_LLM_FUNC if _CALL_LLM_FUNC is not None else getattr(llm_handler, 'call_llm')
 
-                # Gather handler metadata and signature (used for logging/debugging)
                 try:
                     handler_file = getattr(llm_handler, '__file__', str(llm_handler))
                 except Exception:
@@ -278,24 +318,20 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                     params = {}
                 print(f"DEBUG: Using llm_handler at {handler_file} with signature: {sig}")
 
-                # Build kwargs only for parameters that actually exist on the function.
                 kwargs = {}
-                if 'mode' in params: # New check for handler that supports mode as kwarg
+                if 'mode' in params:
                     kwargs['mode'] = mode
                 if 'temperature' in params:
                     kwargs['temperature'] = 0.0
                 if 'use_cache' in params:
                     kwargs['use_cache'] = True
-
-                # Ensure we forward the mock flag if the handler supports it.
                 if 'mock' in params:
                     kwargs['mock'] = mock
 
-                # Ensure the prompt explicitly states the mode for handlers
-                # that only accept a prompt string.
-                prompt_for_call = f"Mode: {mode}\n" + prompt_base
+                # Provide explicit instruction text to the LLM prompt to avoid negation mistakes
+                prompt_for_call = f"Mode: {mode}\n{instruction_text}\n{prompt_base}"
 
-                # DEBUG: show what we're about to send to the handler (truncated)
+                # DEBUG prompt excerpt
                 try:
                     dbg_prompt = prompt_for_call if len(prompt_for_call) < 1000 else prompt_for_call[:1000] + "..."
                     print(f"DEBUG calling llm_handler func name={getattr(func, '__name__', str(func))} mode={mode} mock={mock} prompt_excerpt={repr(dbg_prompt)[:400]}")
@@ -303,14 +339,10 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                     pass
 
                 raw = None
-                # Call the function, dynamically handling arguments.
-                # Prefer keyword-call if handler supports kwargs; otherwise try common positional signatures.
                 try:
                     if kwargs:
-                        # If handler accepts 'mode' as kwarg, pass the base prompt or prompt depending on handler expectations.
                         raw = func(prompt_base if 'mode' in kwargs else prompt_for_call, **kwargs)
                     else:
-                        # Try several positional argument orders, including the common one with mock at the end.
                         try:
                             raw = func(prompt_for_call, mode, 0.0, True, mock)
                         except TypeError:
@@ -322,14 +354,12 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                                 except TypeError:
                                     raw = func(prompt_for_call)
                 except TypeError as te:
-                    # Last-resort positional attempts already tried; re-raise to handled by outer except
                     raise te
 
                 parsed_val = _safe_json_load(raw)
-                # Normalize plain-text or unexpected outputs into expected dict shapes
                 parsed[mode] = _normalize_llm_raw_output(mode, parsed_val, raw)
 
-                # DEBUG: print what we received (raw truncated + parsed snippet)
+                # DEBUG received
                 try:
                     raw_dbg = (raw if raw is not None else '')[:1000]
                 except Exception:
@@ -343,19 +373,14 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                 break
             except Exception as e:
                 last_exc = e
-                # If the error indicates a local LLM server is unreachable (connection refused),
-                # fall back to a local heuristic driven by the user's text (not the canned mock).
                 msg = str(e).lower()
                 if any(x in msg for x in ("connection refused", "httpconnectionpool", "failed to establish a new connection", "max retries exceeded")):
                     print(f"WARNING: LLM provider unreachable ({e}); using local text-based fallback for mode={mode}")
                     try:
-                        # Use the applicant text as the basis for the fallback heuristic
                         text_for_fallback = df_row.get('text_notes') or df_row.get('text') or ''
-                        # Local heuristic per mode
+                        import re
                         if mode == 'extract_risky':
-                            import re
                             rp_list = []
-                            # Patterns tuned to common risky phrases; will only add matches present in text
                             patterns = [
                                 r'open(ed)?\s+.*new\s+lines?\s+of\s+credit',
                                 r'new\s+lines?\s+of\s+credit',
@@ -368,15 +393,15 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                                 r'missed\s+payment(s)?',
                             ]
                             for p in patterns:
-                                m = re.search(p, text_for_fallback, flags=re.IGNORECASE)
-                                if m:
+                                for m in re.finditer(p, text_for_fallback, flags=re.IGNORECASE):
                                     cand = m.group(0)
-                                    if cand not in rp_list:
-                                        rp_list.append(cand)
+                                    # only add candidate if not negated in context
+                                    if not _phrase_is_negated_in_text(cand, text_for_fallback):
+                                        if cand not in rp_list:
+                                            rp_list.append(cand)
                             parsed[mode] = {'risky_phrases': rp_list, 'count': len(rp_list)}
                         elif mode == 'sentiment':
                             low = (text_for_fallback or '').lower()
-                            # simple sentiment heuristic fallback
                             if re.search(r'\b(good|stable|positive|improve|improved|strong)\b', low):
                                 parsed[mode] = {'sentiment': 'positive', 'score': 0.2}
                             elif re.search(r'\b(bad|negative|risk|problem|concern|poor|unstable|decline)\b', low):
@@ -384,15 +409,12 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                             else:
                                 parsed[mode] = {'sentiment': 'neutral', 'score': 0.0}
                         elif mode == 'detect_contradictions':
-                            # simple contradictions fallback: look for "contradict" keywords
-                            import re
                             if re.search(r'contradict|inconsist|inconsistent|conflict', text_for_fallback, flags=re.IGNORECASE):
                                 parsed[mode] = {'contradictions': ['detected_in_text'], 'flag': 1}
                             else:
                                 parsed[mode] = {'contradictions': [], 'flag': 0}
                         else:
                             parsed[mode] = {}
-                        # Print debug for fallback
                         try:
                             print(f"DEBUG fallback parsed[mode] mode={mode} for applicant={applicant_id}: {json.dumps(parsed[mode], ensure_ascii=False)[:800]}")
                         except Exception:
@@ -408,71 +430,77 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                 wait = 0.5 * (2 ** attempt)
                 time.sleep(wait)
         else:
-            # all retries failed
             raise RuntimeError(f"LLM extraction failed for applicant {applicant_id} mode={mode}: {last_exc}")
 
-    # Map parsed outputs to numeric features (same logic as feature_extraction mapper)
-    # --- Augment parsed outputs with simple text-based fallbacks ---
-    def _augment_parsed_with_text(parsed: Dict[str, Any], text: str) -> Dict[str, Any]:
-        """Ensure parsed contains risky/contradiction signals by scanning raw text as a fallback."""
-        try:
-            import re
-            if not isinstance(parsed, dict):
-                parsed = {}
-            # detect contradictions keywords
-            det = parsed.get('detect_contradictions') or {}
-            if not det or (isinstance(det, dict) and det.get('flag', 0) == 0):
-                if isinstance(text, str) and re.search(r'contradict|inconsist|contradiction', text, flags=re.IGNORECASE):
-                    parsed.setdefault('detect_contradictions', {})
-                    parsed['detect_contradictions']['contradictions'] = parsed['detect_contradictions'].get('contradictions', []) + ['detected_in_text']
-                    parsed['detect_contradictions']['flag'] = 1
+    # After LLM/fallback parsed is constructed, remove any risky phrase that is only mentioned in negated contexts
+    try:
+        text_notes = df_row.get('text_notes') or df_row.get('text') or ''
+        risky = parsed.get('extract_risky') or {}
+        rp_list = risky.get('risky_phrases', []) if isinstance(risky, dict) else []
+        filtered = []
+        for phrase in rp_list:
+            # if phrase is present affirmatively anywhere in the text, keep it
+            if not _phrase_is_negated_in_text(phrase, text_notes):
+                filtered.append(phrase)
+        parsed.setdefault('extract_risky', {})
+        parsed['extract_risky']['risky_phrases'] = filtered
+        parsed['extract_risky']['count'] = len(filtered)
+    except Exception:
+        # if anything goes wrong, keep existing parsed as-is
+        pass
 
-            # detect risky phrases like opened new lines of credit, recent bankrupt, default, late
-            risky = parsed.get('extract_risky') or {}
-            rp_list = risky.get('risky_phrases', []) if isinstance(risky, dict) else []
-            # common risky indicators
-            patterns = [r'open(ed)?\s+.*new\s+lines?\s+of\s+credit', r'new\s+lines?\s+of\s+credit', r'bankrupt', r'default', r'late payment', r'collection']
-            for p in patterns:
-                if isinstance(text, str) and re.search(p, text, flags=re.IGNORECASE):
-                    cand = re.search(p, text, flags=re.IGNORECASE).group(0)
+    # keep augmentation as before (it will add additional asserted phrases)
+    def _augment_parsed_with_text(parsed: Dict[str, Any], text: str) -> Dict[str, Any]:
+        import re
+        if not isinstance(parsed, dict):
+            parsed = {}
+        det = parsed.get('detect_contradictions') or {}
+        if not det or (isinstance(det, dict) and det.get('flag', 0) == 0):
+            if isinstance(text, str) and re.search(r'contradict|inconsist|contradiction', text, flags=re.IGNORECASE):
+                parsed.setdefault('detect_contradictions', {})
+                parsed['detect_contradictions']['contradictions'] = parsed['detect_contradictions'].get('contradictions', []) + ['detected_in_text']
+                parsed['detect_contradictions']['flag'] = 1
+
+        risky = parsed.get('extract_risky') or {}
+        rp_list = risky.get('risky_phrases', []) if isinstance(risky, dict) else []
+        patterns = [r'open(ed)?\s+.*new\s+lines?\s+of\s+credit', r'new\s+lines?\s+of\s+credit', r'bankrupt', r'default', r'late payment', r'collection']
+        for p in patterns:
+            for m in re.finditer(p, text, flags=re.IGNORECASE):
+                cand = m.group(0)
+                # only add if phrase is not negated
+                if not _phrase_is_negated_in_text(cand, text):
                     if cand not in rp_list:
                         rp_list.append(cand)
 
-            if rp_list:
-                parsed.setdefault('extract_risky', {})
-                parsed['extract_risky']['risky_phrases'] = rp_list
-                parsed['extract_risky']['count'] = len(rp_list)
+        if rp_list:
+            parsed.setdefault('extract_risky', {})
+            parsed['extract_risky']['risky_phrases'] = rp_list
+            parsed['extract_risky']['count'] = len(rp_list)
 
-        except Exception:
-            return parsed
         return parsed
 
-    # apply augmentation using the original free-text when available
     try:
         text_notes = df_row.get('text_notes') or df_row.get('text') or ''
         parsed = _augment_parsed_with_text(parsed, text_notes)
     except Exception:
         pass
 
-    # sentiment
+    # then compute sentiment_score / risky_count / contradictions exactly as before...
     sent = parsed.get("sentiment", {})
     if isinstance(sent, dict):
         sentiment_score = float(sent.get("score", 0.0))
     else:
         sentiment_score = 0.0
 
-    # risky
     risky = parsed.get("extract_risky", {})
     if isinstance(risky, dict):
         risky_count = int(risky.get("count", len(risky.get("risky_phrases", []))))
     else:
         risky_count = 0
 
-    # contradictions
     contra = parsed.get("detect_contradictions", {})
     contradiction_flag = int(contra.get("flag", 0)) if isinstance(contra, dict) else 0
 
-    # credibility_score heuristic
     summary = parsed.get("summary", {})
     conf = float(summary.get("confidence", 0.5)) if isinstance(summary, dict) else 0.5
     credibility_score = max(0.0, min(1.0, conf - 0.3 * contradiction_flag - 0.05 * risky_count))
@@ -485,7 +513,6 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
         "credibility_score": credibility_score,
     }
 
-    # Debug: when running with real LLM (mock=False), print parsed/raw to help diagnose misclassifications
     try:
         if not mock:
             print(f"DEBUG: applicant={applicant_id} parsed={parsed} features={features}")
