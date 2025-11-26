@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1,
+    "name": "Example 1: Low Risk - Clean History",
+    "text": "I have been employed at the same company for 8 years with a stable income of $85,000. I have never missed a payment on any of my credit obligations and maintain a low debt-to-income ratio. My credit score is excellent."
+  },
+  {
+    "id": 2,
+    "name": "Example 2: High Risk - Recent Issues",
+    "text": "I recently lost my job and missed several credit card payments in the last 3 months. I have multiple accounts that are currently 60 days past due and received a collection notice last week."
+  },
+  {
+    "id": 3,
+    "name": "Example 3: Medium Risk - Mixed Profile",
+    "text": "I occasionally miss payment due dates but always pay within 30 days. My credit utilization is around 70% but I have steady employment for the past 2 years. No major delinquencies or defaults."
+  },
+  {
+    "id": 4,
+    "name": "Example 4: Negation Test - Positive",
+    "text": "I have no late payments, no collections, and no defaults in my credit history. I've never filed for bankruptcy and have always maintained good credit standing."
+  },
+  {
+    "id": 5,
+    "name": "Example 5: Temporal Factor - Old Issues",
+    "text": "I filed for bankruptcy 9 years ago due to medical bills, but since then I have rebuilt my credit completely. For the past 7 years, I have had perfect payment history with no negative marks."
+  },
+  {
+    "id": 6,
+    "name": "Example 6: High Risk - Multiple Red Flags",
+    "text": "I have had multiple late payments, a recent foreclosure, and several accounts in collections. My income is inconsistent and I currently have no savings."
+  },
+  {
+    "id": 7,
+    "name": "Example 7: Low Risk - Strong Assets",
+    "text": "I never miss payments and always pay on time. I own my home with significant equity, have substantial savings, and maintain low credit card balances. My employment is stable for 15 years."
+  },
+  {
+    "id": 8,
+    "name": "Example 8: Intensity Modifier - Frequency",
+    "text": "I sometimes struggle with payments during the winter months when my business is slower, but I frequently catch up within a few weeks. Overall, I rarely have serious delinquencies."
+  },
+  {
+    "id": 9,
+    "name": "Example 9: Mitigating Factors",
+    "text": "I missed two payments last year due to a medical emergency, but I have since recovered and resumed regular payments. I have high income, good employment, and substantial assets that offset the temporary issues."
+  },
+  {
+    "id": 10,
+    "name": "Example 10: Complex Negation",
+    "text": "Unlike my previous financial troubles, I now have no outstanding debt, no late payments, and no risk of default. I've turned my situation around completely."
+  }
+]
