@@ -190,6 +190,79 @@ def extract_text_from_file(uploaded_file) -> str:
         return (content[:300] + "...") if len(content) > 300 else content
     return f"[Extracted text unavailable for {name}]"
 
+
+def parse_fields_from_text(text: str, filename: str = "") -> dict:
+    """Extract common applicant fields from document text using regex heuristics.
+
+    Looks for patterns like:
+    - Applicant Name: <name>
+    - Applicant Age: <digits>
+    - Annual Household Income: $<number>
+    - Requested Loan Amount: $<number>
+
+    Returns a dict with keys: `name`, `age`, `income`, `requested_loan`, `text_notes`.
+    """
+    import re
+
+    out = {
+        "name": None,
+        "age": None,
+        "income": None,
+        "requested_loan": None,
+        "text_notes": text,
+    }
+
+    if not text:
+        return out
+
+    # Normalize whitespace
+    t = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
+
+    # Name: look for 'Applicant Name:' or 'Name:' prefixes
+    m = re.search(r"Applicant Name:\s*(.+?)(?:\n|Applicant Age:|Applicant|$)", t, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"\bName:\s*(.+?)(?:\n|$)", t, flags=re.IGNORECASE)
+    if m:
+        out["name"] = m.group(1).strip().rstrip(',')
+
+    # Age
+    m = re.search(r"Applicant Age:\s*(\d{1,3})", t, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.IGNORECASE)
+    if m:
+        try:
+            out["age"] = int(m.group(1))
+        except Exception:
+            out["age"] = None
+
+    # Income
+    m = re.search(r"Annual Household Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    if m:
+        s = m.group(1).replace(',', '')
+        try:
+            out["income"] = int(s)
+        except Exception:
+            out["income"] = None
+
+    # Requested loan
+    m = re.search(r"Requested Loan Amount:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"Requested Loan:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    if m:
+        s = m.group(1).replace(',', '')
+        try:
+            out["requested_loan"] = int(s)
+        except Exception:
+            out["requested_loan"] = None
+
+    # If name missing, fallback to filename as a human-friendly name
+    if not out.get("name") and filename:
+        out["name"] = os.path.splitext(os.path.basename(filename))[0]
+
+    return out
+
 def main() -> None:
     # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
     if "first_visit" not in st.session_state:
@@ -271,15 +344,22 @@ def main() -> None:
                 df = pd.DataFrame()
         else:
             rows = []
+            next_id = 1
+            # If user provided multiple files, give them incremental numeric ids
             for f in uploaded_files:
                 text = extract_text_from_file(f)
-                rows.append({
-                    'id': f.name,
-                    'name': f.name,
-                    'income': None,
+                parsed = parse_fields_from_text(text, getattr(f, 'name', ''))
+                row = {
+                    'id': next_id,
+                    'name': parsed.get('name') or getattr(f, 'name', '') or f"applicant_{next_id}",
+                    'age': parsed.get('age'),
+                    'income': parsed.get('income'),
+                    'requested_loan': parsed.get('requested_loan'),
                     'credit_score': None,
-                    'text_notes': text,
-                })
+                    'text_notes': parsed.get('text_notes') or text,
+                }
+                rows.append(row)
+                next_id += 1
             df = pd.DataFrame(rows)
     else:
         df = load_demo_data(demo)

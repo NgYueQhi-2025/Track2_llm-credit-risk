@@ -21,16 +21,23 @@ try:
     from google.genai.errors import APIError
     from google.genai import types
     _GEMINI_AVAILABLE = True
-    # Initialize client using env var if present.
+    # Initialize client using env var if present. Different genai SDK
+    # releases expose different initialization patterns. Try the
+    # most compatible approaches with graceful fallbacks.
     try:
         gemini_api_key = os.getenv("GEMINI_API_KEY")
         if gemini_api_key:
-            # the SDK supports configure(api_key=...) — this helps when running outside Cloud
-            genai.configure(api_key=gemini_api_key)
+            # Prefer passing api_key directly to Client if supported.
+            try:
+                GEMINI_CLIENT = genai.Client(api_key=gemini_api_key)
+            except TypeError:
+                # If Client doesn't accept api_key, set a fallback env var
+                # that the SDK may read and then instantiate the client.
+                os.environ.setdefault("GOOGLE_API_KEY", gemini_api_key)
+                GEMINI_CLIENT = genai.Client()
         else:
-            # genai.configure() will also attempt to read env var if available
-            genai.configure()
-        GEMINI_CLIENT = genai.Client()
+            # No explicit key provided; try default client creation.
+            GEMINI_CLIENT = genai.Client()
     except Exception as e:
         logging.warning(f"Could not initialize Gemini Client: {e}")
         GEMINI_CLIENT = None
@@ -170,9 +177,8 @@ def call_llm(
         "GEMINI_API_KEY in your secrets. Alternatively, set OPENAI_API_KEY "
         "or run in mock mode."
     )
-
-
----
+#
+# ---
 
 ## 2. CHUNKING HELPER FUNCTION (Now placed last)
 def process_text_word_by_word(

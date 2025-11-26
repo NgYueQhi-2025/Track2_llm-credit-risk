@@ -23,5 +23,48 @@
       "isBackground": true,
       "problemMatcher": []
     }
+    ,
+    {
+      "label": "Auto Push Changes (one-shot)",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tools\\auto_sync\\auto_push.ps1"
+      ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "isBackground": false,
+      "problemMatcher": []
+    },
+    {
+      "label": "Auto Push Loop (background)",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tools\\auto_sync\\auto_push_loop.ps1",
+        "-IntervalSeconds",
+        "5"
+      ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    }
   ]
 }
