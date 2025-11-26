@@ -16,7 +16,7 @@ import inspect
 try:
     from llms.backend import llm_handler
 except Exception:
-    llm_path = os.path.join(os.path.dirname(__file__), "..", "llms", "backend", "llm_handler")
+    llm_path = os.path.join(os.path.dirname(__file__), "..", "llms", "backend", "llm_handler.py")
     llm_path = os.path.normpath(llm_path)
     if os.path.exists(llm_path):
             # Try to load via importlib; if that fails (e.g. file has no .py
@@ -41,7 +41,7 @@ except Exception:
                 exec(compile(src, llm_path, "exec"), llm_handler.__dict__)
     else:
         # Last resort: raise the original import error for visibility
-        raise
+        raise ImportError(f"Could not import or load llm_handler from {llm_path}")
 
 # Attempt to import a compatibility adapter that provides a canonical
 # `call_llm(prompt, mode=..., temperature=..., use_cache=..., mock=...)`
@@ -170,6 +170,8 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                     kwargs['temperature'] = 0.0
                 if 'use_cache' in params:
                     kwargs['use_cache'] = True
+                
+                # --- EDITED: Pass 'mock' state to the LLM call ---
                 if 'mock' in params:
                     kwargs['mock'] = mock
 
@@ -193,12 +195,14 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                         # Try common positional orders as last resorts
                         tried = False
                         try:
+                            # Try positional: prompt, mode, temperature, use_cache, mock
                             raw = func(prompt_for_call, mode, 0.0, True, mock)
                             tried = True
                         except Exception:
                             pass
                         if not tried:
                             try:
+                                # Try positional: prompt, mode
                                 raw = func(prompt_for_call, mode)
                             except Exception:
                                 # Final fallback: call with original prompt_base
@@ -349,6 +353,7 @@ def predict(features: Dict[str, Any]) -> Dict[str, Any]:
 
     if model is not None:
         try:
+            # Assumes model.predict_proba returns [proba_class_0, proba_class_1]
             score = float(model.predict_proba([vec])[0][1])
         except Exception:
             # model present but interface unexpected; fallback
@@ -359,6 +364,7 @@ def predict(features: Dict[str, Any]) -> Dict[str, Any]:
     if score is None:
         # simple deterministic heuristic: higher risky count and low credibility -> higher risk
         # adjusted weights to make risky phrases and contradictions more influential for demo clarity
+        # score = 0.55 * (Risky Count / (1 + Risky Count)) + 0.25 * (1 - Credibility Score) + 0.20 * Contradiction Flag
         score = max(0.0, min(1.0, 0.55 * (vec[1] / (1 + vec[1])) + 0.25 * (1 - vec[3]) + 0.20 * vec[2]))
 
     # lower the threshold slightly so borderline cases surface as 'high' in demos
