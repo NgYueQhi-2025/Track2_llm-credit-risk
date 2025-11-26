@@ -1,210 +1,120 @@
-import os
-import json
-import time
-import hashlib
-import requests
-import numpy as np
-from typing import Dict, Any, Optional
-
-# --- Configuration ---
-# Set the model to be used for LLM text generation/extraction
-MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
-
-# Cache file next to this script (simplified caching from your code)
-CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".llm_cache.json")
-# We no longer need CACHE_DIR or os.makedirs(CACHE_DIR)
-
-# ------------------------------------------------------------
-# LLM Response Schema (Crucial for structured output)
-# ------------------------------------------------------------
-# The model MUST return JSON conforming to this schema for feature_extraction to work.
-LLM_RESPONSE_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "summary": {"type": "STRING", "description": "A concise, single-paragraph summary of the applicant's financial request and background story."},
-        "sentiment_score": {"type": "NUMBER", "description": "A score from -1.0 (very negative) to 1.0 (very positive) reflecting the tone and confidence of the application text."},
-        "risky_phrase_count": {"type": "NUMBER", "description": "The count of specific keywords or phrases (e.g., 'gambling debt', 'urgent liquidation', 'unstable income') identified in the text that indicate higher risk."},
-        "contradiction_flag": {"type": "NUMBER", "description": "0 if the text is fully consistent, 1 if there is a clear contradiction or ambiguity regarding income, assets, or intent."},
-        "credibility_score": {"type": "NUMBER", "description": "A score from 0.0 to 1.0 reflecting the overall coherence and believability of the application text. (1.0 = highly credible)"}
-    },
-    "required": ["summary", "sentiment_score", "risky_phrase_count", "contradiction_flag", "credibility_score"]
-}
-
-# ------------------------------------------------------------
-# Caching Functions (Adapted from your provided code)
-# ------------------------------------------------------------
-def _get_cache_key(prompt: str) -> str:
-    """Return a short sha256 hex digest for cache keys based on the prompt."""
-    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-
-def _load_cache() -> Dict[str, Any]:
-    """Load cache dict from disk. Returns empty dict on error."""
-    try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            print(f"DEBUG: Loaded cache file: {CACHE_FILE}")
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        print(f"WARNING: Failed to load cache file {CACHE_FILE}: {e}")
-        return {}
-
-def _save_cache(cache: Dict[str, Any]) -> None:
-    """Atomically write cache dict to disk."""
-    tmp = CACHE_FILE + ".tmp"
-    os.makedirs(os.path.dirname(CACHE_FILE) or ".", exist_ok=True)
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, CACHE_FILE)
-        print(f"DEBUG: Saved cache to: {CACHE_FILE}")
-    except Exception as e:
-        print(f"WARNING: Failed to save cache file {CACHE_FILE}: {e}")
-
-# ------------------------------------------------------------
-# LLM API Call with Backoff
-# ------------------------------------------------------------
-def call_llm(prompt: str, use_cache: bool = True, api_key: str = "AIzaSyA-JWSWhRRJdIis3ujmBt8iDv7ij3MJRDQ", max_retries: int = 5) -> Dict[str, Any]:
+def call_llm(
+    prompt: str,
+    mode: str = "summary",
+    temperature: float = 0.0,
+    use_cache: bool = True,
+    mock: bool = False,
+    api_key: str = "AIzaSyA-JWSWhRRJdIis3ujmBt8iDv7ij3MJRDQ",
+    max_retries: int = 5
+) -> Dict[str, Any]:
     """
-    Calls the Gemini API to extract features from text, with caching and backoff.
-    
+    Unified LLM call function with mode support, caching, and exponential backoff.
+
     Args:
         prompt: The applicant's raw text data.
-        use_cache: If True, tries to load from/save to disk cache.
-        api_key: The API key for authorization (can be empty if running in a known environment).
-        max_retries: Maximum number of times to retry the API call on failure.
+        mode: The mode of processing, e.g., 'summary'.
+        temperature: LLM generation randomness.
+        use_cache: If True, uses disk cache.
+        mock: If True, returns a mock response for testing.
+        api_key: API key for LLM service.
+        max_retries: Maximum retry attempts on failure.
 
     Returns:
         A dictionary matching the LLM_RESPONSE_SCHEMA.
     """
-    
-    cache_key = _get_cache_key(prompt)
-    cache = _load_cache()
-    
-    # 1. Check Cache
+
+    # --- Handle Mock Mode ---
+    if mock:
+        print("WARNING: Using MOCK LLM response.")
+        risk_factor = min(len(prompt) / 500, 1.0)
+        return {
+            "summary": f"MOCK SUMMARY ({mode}): The applicant provided {len(prompt)} characters of text.",
+            "sentiment_score": round(0.5 - (risk_factor * 0.4), 4),
+            "risky_phrase_count": int(risk_factor * 3) + 1,
+            "contradiction_flag": 1 if len(prompt) > 800 else 0,
+            "credibility_score": round(1.0 - (risk_factor * 0.2), 4)
+        }
+
+    # --- Prepare Cache ---
+    cache_key = hashlib.sha256((prompt + mode).encode("utf-8")).hexdigest()
+    cache = {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"WARNING: Failed to load cache: {e}")
+
     if use_cache and cache_key in cache:
-        # Note: We assume the cached content is the final extracted features dict
-        print(f"DEBUG: Loaded response from cache for key: {cache_key}")
-        return cache[cache_key] 
-        
-    # 2. Prepare API Call
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/Default Gemini API Key:generateContent?key=AIzaSyA-JWSWhRRJdIis3ujmBt8iDv7ij3MJRDQ"
-    
-    # System instruction to guide the LLM's persona and output structure
+        print(f"DEBUG: Loaded response from cache for key {cache_key}")
+        return cache[cache_key]
+
+    # --- Prepare API Call ---
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/Default Gemini API Key:generateContent?key={api_key}"
     system_instruction = (
         "You are an expert financial risk assessment analyst. "
-        "Your task is to analyze the provided loan application text and extract "
-        "the following five structured features. Provide ONLY the JSON object, "
-        "no preamble or explanation. The features must strictly adhere to the defined schema."
+        "Analyze the provided loan application text and extract "
+        "the five structured features defined in LLM_RESPONSE_SCHEMA. "
+        "Provide ONLY the JSON object, strictly adhering to the schema."
     )
-    
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "systemInstruction": {"parts": [{"text": system_instruction}]},
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": LLM_RESPONSE_SCHEMA,
-            "temperature": 0.0 # Force deterministic output for feature extraction
+            "temperature": temperature
         }
     }
 
-    # 3. API Call with Exponential Backoff
+    # --- API Call with Exponential Backoff ---
     for attempt in range(max_retries):
         try:
             print(f"DEBUG: Calling LLM (Attempt {attempt + 1})...")
             response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
-            response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+            response.raise_for_status()
 
             result = response.json()
-            
-            # Check for valid structure in the response
             candidate = result.get('candidates', [{}])[0]
             part = candidate.get('content', {}).get('parts', [{}])[0]
-            
             if part.get('text'):
-                # The text field contains the raw JSON string
                 raw_json_text = part['text'].strip()
-                
-                # Parse the structured JSON response
                 extracted_features = json.loads(raw_json_text)
-                
-                # Validation check: ensure all required keys are present
+
+                # Validate all required keys
                 for key in LLM_RESPONSE_SCHEMA['required']:
                     if key not in extracted_features:
                         raise ValueError(f"Extracted feature '{key}' is missing from LLM response.")
 
-                # 4. Save Cache and Return
+                # Save to cache
                 if use_cache:
-                    cache[cache_key] = extracted_features # Save the feature dict directly
-                    _save_cache(cache)
-                    
+                    cache[cache_key] = extracted_features
+                    tmp = CACHE_FILE + ".tmp"
+                    try:
+                        os.makedirs(os.path.dirname(CACHE_FILE) or ".", exist_ok=True)
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(cache, f, ensure_ascii=False, indent=2)
+                        os.replace(tmp, CACHE_FILE)
+                        print(f"DEBUG: Saved cache to {CACHE_FILE}")
+                    except Exception as e:
+                        print(f"WARNING: Failed to save cache: {e}")
+
                 return extracted_features
             else:
-                # Handle cases where the model returns an empty or malformed response
-                raise ValueError(f"LLM returned an empty or unparsable structured response: {result}")
+                raise ValueError(f"LLM returned empty or unparsable response: {result}")
 
         except requests.exceptions.HTTPError as e:
-            # Handle specific HTTP errors (e.g., 429 Rate Limit, 5xx Server Errors)
             print(f"HTTP Error on attempt {attempt + 1}: {e}. Retrying...")
         except (requests.exceptions.RequestException, ValueError, json.JSONDecodeError) as e:
-            # Handle network errors or JSON/structure parsing errors
             print(f"Non-HTTP Error on attempt {attempt + 1}: {e}. Retrying...")
-            
-        # Exponential Backoff and Jitter
+
+        # Exponential backoff with jitter
         if attempt < max_retries - 1:
             wait_time = 2**attempt + np.random.uniform(0, 1)
             print(f"Waiting for {wait_time:.2f} seconds before retry.")
             time.sleep(wait_time)
         else:
-            # Final attempt failed
             raise Exception("LLM call failed after maximum retries.")
 
-    # Should be unreachable if max_retries > 0
     raise Exception("LLM call failed due to internal logic error.")
-
-# --- Mock Implementation (Fallback) ---
-def call_llm_mock(prompt: str) -> Dict[str, Any]:
-    """Mock LLM response for development/testing."""
-    print("WARNING: Using MOCK LLM response.")
-    
-    # Simple heuristic to simulate risk from text length
-    risk_factor = min(len(prompt) / 500, 1.0)
-    
-    return {
-        "summary": f"MOCK SUMMARY: The applicant provided {len(prompt)} characters of text detailing their request.",
-        "sentiment_score": round(0.5 - (risk_factor * 0.4), 4), 
-        "risky_phrase_count": int(risk_factor * 3) + 1, # +1 ensures it's at least 1 for non-empty input
-        "contradiction_flag": 1 if len(prompt) > 800 else 0, 
-        "credibility_score": round(1.0 - (risk_factor * 0.2), 4)
-    }
-
-if __name__ == '__main__':
-    # quick local test to verify cache behavior
-    test_prompt = "I need $50,000 for a risky investment, but I promise my job at Google pays $200k/year. I have no savings."
-    
-    # 1. Test Mock Mode
-    print("\n--- Testing Mock Mode ---")
-    mock_result = call_llm_mock(test_prompt)
-    print("Mock Output:", json.dumps(mock_result, indent=2))
-    
-    # 2. Test Cache behavior (since real API key is missing)
-    print("\n--- Testing Cache with Mock as Fallback ---")
-    # Simulate a real call (it will fail without API key, but we test the structure)
-    # The current implementation of call_llm relies on an API key being present.
-    # We will skip the actual call here and rely on the robust logic above, 
-    # but the caching functions are now fully integrated and testable.
-    
-    # To run call_llm below, you would need to set GEMINI_API_KEY environment variable.
-    # The primary use in your Flask app will be via the imported function.
-    
-    # Example test run (uncomment if you have a key):
-    # try:
-    #     print('First call (real) ->')
-    #     real_result = call_llm(test_prompt, use_cache=True, api_key="YOUR_KEY_HERE")
-    #     print("Real Output:", json.dumps(real_result, indent=2))
-    #     
-    #     print('Second call (cache) ->')
-    #     cached_result = call_llm(test_prompt, use_cache=True, api_key="YOUR_KEY_HERE")
-    #     print("Cached Output:", json.dumps(cached_result, indent=2))
-    # except Exception as e:
-    #     print(f"\nSkipping real API test due to error (Likely missing API Key): {e}")
