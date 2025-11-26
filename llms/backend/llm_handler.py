@@ -20,9 +20,18 @@ try:
     from google.genai.errors import APIError
     from google.genai import types
     _GEMINI_AVAILABLE = True
-    # Initialize client using env var if present.
+    # Initialize client using env var or Streamlit secrets if present.
     try:
         gemini_api_key = os.getenv("GEMINI_API_KEY")
+        # Try Streamlit secrets as fallback if env var not set
+        if not gemini_api_key:
+            try:
+                import streamlit as st
+                if hasattr(st, 'secrets') and "GEMINI_API_KEY" in st.secrets:
+                    gemini_api_key = st.secrets["GEMINI_API_KEY"]
+            except Exception:
+                pass  # Streamlit not available or secrets not configured
+        
         if gemini_api_key:
             # the SDK supports configure(api_key=...) — this helps when running outside Cloud
             genai.configure(api_key=gemini_api_key)
