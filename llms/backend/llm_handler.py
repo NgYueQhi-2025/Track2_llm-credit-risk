@@ -60,6 +60,71 @@ def _safe_extract_json(text: str) -> Any:
     except Exception:
         return s
 
+# Add this function to llms/backend/llm_handler.py
+
+def process_text_word_by_word(
+    text: str,
+    mode: str,
+    chunk_size_words: int = 20,
+    temperature: float = 0.0,
+    mock: bool = False
+) -> List[Dict[str, Any]]:
+    """
+    Splits text into chunks, calls the LLM for each chunk, and collects results.
+
+    The function uses the existing `call_llm` to perform the actual API call.
+    """
+    
+    # Simple tokenization by splitting on whitespace
+    words = text.split()
+    
+    results = []
+    
+    # Iterate over the words in chunks
+    for i in range(0, len(words), chunk_size_words):
+        chunk_words = words[i:i + chunk_size_words]
+        chunk_text = " ".join(chunk_words)
+        
+        # Determine the start and end word indices (helpful for debugging/context)
+        start_index = i
+        end_index = i + len(chunk_words) - 1
+
+        try:
+            # 1. Call the existing core LLM function
+            raw_output = call_llm(
+                prompt=chunk_text,
+                mode=mode,
+                temperature=temperature,
+                use_cache=True,
+                mock=mock
+            )
+            
+            # 2. Safely parse the raw JSON output
+            parsed_output = _safe_extract_json(raw_output)
+
+            results.append({
+                "chunk_text": chunk_text,
+                "word_start": start_index,
+                "word_end": end_index,
+                "raw": raw_output,
+                "parsed": parsed_output
+            })
+            
+        except Exception as e:
+            # Handle API errors or parsing failures for this chunk gracefully
+            results.append({
+                "chunk_text": chunk_text,
+                "word_start": start_index,
+                "word_end": end_index,
+                "error": str(e)
+            })
+            # Log the error, but continue processing subsequent chunks
+            logging.error(f"Error processing chunk {i}: {e}")
+
+    return results
+
+# NOTE: You must also ensure you import List and Dict at the top of the file:
+# from typing import Any, Optional, List, Dict
 
 def call_llm(
     prompt: str,
