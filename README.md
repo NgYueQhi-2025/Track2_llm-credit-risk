@@ -263,3 +263,28 @@ Add your preferred license (MIT recommended for demos) and include a `LICENSE` f
 
 If you want, I can also add a short `docs/` slide text or export-ready screenshots after you deploy. Open an issue or request for any additions.
 # Track2_llm-credit-risk
+
+---
+
+## Auto-sync helper (keep workspace up-to-date)
+
+This repository includes a small, intentionally conservative auto-sync helper to keep your local clone up-to-date with `origin/main`.
+
+- `tools/auto_sync/auto_sync.ps1`: PowerShell script that fetches from the remote and attempts a `git pull --ff-only` on `origin/main` at a configurable interval (default 5 minutes). It will stop if a non-fast-forward update is required so you can resolve conflicts manually.
+- `.vscode/tasks.json`: VS Code task `Auto Sync Repo (PowerShell)` — run this task to start the sync loop in a dedicated terminal.
+
+Usage:
+
+1. From VS Code: open the Command Palette → `Tasks: Run Task` → `Auto Sync Repo (PowerShell)`.
+2. Or run directly in PowerShell from the repo root:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\auto_sync\auto_sync.ps1 -IntervalMinutes 5
+```
+
+Notes:
+
+- The script only performs fast-forward pulls to avoid creating automatic merge commits or conflicts.
+- If your branch has diverged from the remote (non-fast-forward), the script prints instructions and stops — resolve manually before re-enabling auto-sync.
+- Adjust `-IntervalMinutes` to a value that suits your workflow.

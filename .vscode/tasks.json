@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Auto Sync Repo (PowerShell)",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tools\\auto_sync\\auto_sync.ps1",
+        "-IntervalMinutes",
+        "5"
+      ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}
