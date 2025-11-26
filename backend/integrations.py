@@ -2,7 +2,7 @@ import csv
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import importlib.util
 import joblib
@@ -14,34 +14,34 @@ import inspect
 # isn't importable, fall back to loading it by file path so the demo
 # still runs.
 try:
+    # IMPORTANT: Your file structure needs to support this relative import.
+    # e.g., if this file is in 'backend/' and llm_handler.py is in 'llms/backend/'
     from llms.backend import llm_handler
-except Exception:
+except Exception as original_exc:
+    # If the standard import fails, try to load it manually
     llm_path = os.path.join(os.path.dirname(__file__), "..", "llms", "backend", "llm_handler.py")
     llm_path = os.path.normpath(llm_path)
     if os.path.exists(llm_path):
-            # Try to load via importlib; if that fails (e.g. file has no .py
-            # extension and spec.loader is None), fall back to executing the
-            # source text into a new module namespace.
-            spec = importlib.util.spec_from_file_location("llm_handler", llm_path)
-            if spec is not None and spec.loader is not None:
-                llm_handler = importlib.util.module_from_spec(spec)
+        spec = importlib.util.spec_from_file_location("llm_handler", llm_path)
+        if spec is not None and spec.loader is not None:
+            llm_handler = importlib.util.module_from_spec(spec)
+            try:
                 spec.loader.exec_module(llm_handler)
-            else:
-                # Read source and exec into module
-                import types
-
-                llm_handler = types.ModuleType("llm_handler")
-                # populate typical module attributes so code using __file__ or
-                # __package__ behaves as expected
-                llm_handler.__file__ = llm_path
-                llm_handler.__package__ = "llms.backend"
-                llm_handler.__name__ = "llms.backend.llm_handler"
-                with open(llm_path, "r", encoding="utf-8") as f:
-                    src = f.read()
-                exec(compile(src, llm_path, "exec"), llm_handler.__dict__)
+            except Exception as load_exc:
+                raise ImportError(f"Could not execute llm_handler module from {llm_path}: {load_exc}") from load_exc
+        else:
+            # Fallback for odd file types (very unlikely here)
+            import types
+            llm_handler = types.ModuleType("llm_handler")
+            llm_handler.__file__ = llm_path
+            llm_handler.__package__ = "llms.backend"
+            llm_handler.__name__ = "llms.backend.llm_handler"
+            with open(llm_path, "r", encoding="utf-8") as f:
+                src = f.read()
+            exec(compile(src, llm_path, "exec"), llm_handler.__dict__)
     else:
         # Last resort: raise the original import error for visibility
-        raise ImportError(f"Could not import or load llm_handler from {llm_path}")
+        raise ImportError(f"Could not import or load llm_handler from {llm_path} (original error: {original_exc})")
 
 # Attempt to import a compatibility adapter that provides a canonical
 # `call_llm(prompt, mode=..., temperature=..., use_cache=..., mock=...)`
@@ -151,7 +151,7 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                 # llm_handler.call_llm function.
                 func = _CALL_LLM_FUNC if _CALL_LLM_FUNC is not None else getattr(llm_handler, 'call_llm')
 
-                # Gather handler metadata and signature
+                # Gather handler metadata and signature (used for logging/debugging)
                 try:
                     handler_file = getattr(llm_handler, '__file__', str(llm_handler))
                 except Exception:
@@ -166,6 +166,8 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
 
                 # Build kwargs only for parameters that actually exist on the function.
                 kwargs = {}
+                if 'mode' in params: # New check for handler that supports mode as kwarg
+                    kwargs['mode'] = mode
                 if 'temperature' in params:
                     kwargs['temperature'] = 0.0
                 if 'use_cache' in params:
@@ -180,14 +182,17 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                 prompt_for_call = f"Mode: {mode}\n" + prompt_base
 
                 raw = None
-                # First attempt: call with kwargs if any
+                # Call the function, dynamically handling arguments
+                # We prioritize passing kwargs and try falling back to positional arguments
                 try:
                     if kwargs:
-                        # If handler accepts 'mode' as kwarg it will be passed via kwargs
-                        raw = func(prompt_for_call if 'mode' not in params else prompt_base, **kwargs)
+                        # If handler accepts 'mode' as kwarg, we pass the base prompt.
+                        # Otherwise, we pass the enriched prompt.
+                        raw = func(prompt_base if 'mode' in kwargs else prompt_for_call, **kwargs)
                     else:
                         raw = func(prompt_for_call)
                 except TypeError:
+                    # Fallback on positional arguments if kwargs fail, using original logic
                     # Try prompt-only
                     try:
                         raw = func(prompt_for_call)
@@ -344,7 +349,7 @@ def predict(features: Dict[str, Any]) -> Dict[str, Any]:
                 model = None
 
     # Convert features to vector in expected order
-    vec = [
+    vec: List[float] = [
         float(features.get("sentiment_score", 0.0)),
         float(features.get("risky_phrase_count", 0.0)),
         float(features.get("contradiction_flag", 0.0)),
@@ -363,8 +368,6 @@ def predict(features: Dict[str, Any]) -> Dict[str, Any]:
 
     if score is None:
         # simple deterministic heuristic: higher risky count and low credibility -> higher risk
-        # adjusted weights to make risky phrases and contradictions more influential for demo clarity
-        # score = 0.55 * (Risky Count / (1 + Risky Count)) + 0.25 * (1 - Credibility Score) + 0.20 * Contradiction Flag
         score = max(0.0, min(1.0, 0.55 * (vec[1] / (1 + vec[1])) + 0.25 * (1 - vec[3]) + 0.20 * vec[2]))
 
     # lower the threshold slightly so borderline cases surface as 'high' in demos
