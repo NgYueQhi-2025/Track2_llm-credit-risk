@@ -13,7 +13,7 @@ import streamlit as st
 _THIS_DIR = os.path.dirname(__file__)
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, os.pardir))
 if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+    sys.path.insert(0, _PROJECT_ROOT)
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
