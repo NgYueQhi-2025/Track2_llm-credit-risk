@@ -18,7 +18,7 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 try:
-    import ui_helpers
+    import ui_helpers
 except Exception:
     # fallback: try package import
     try:
