@@ -1,6 +1,6 @@
 # --- snippet to integrate into your upload/processing flow ---
 
-from llms.backend.llm_handler.py import process_text_word_by_word
+from llms.backend.llm_handler import process_text_word_by_word
 import os
 
 USE_MOCK = (os.environ.get('USE_MOCK_LLM','true').lower() == 'true')
