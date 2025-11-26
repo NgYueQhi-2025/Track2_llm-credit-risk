@@ -203,6 +203,14 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
     """
     applicant_id = str(df_row.get("id", "unknown"))
 
+    # DEBUG: surface incoming row content so we can confirm the text field is present
+    try:
+        sample_text = (df_row.get('text_notes') or df_row.get('text') or df_row.get('text_to_analyze') or '')[:1000]
+    except Exception:
+        sample_text = ''
+    print(f"DEBUG run_feature_extraction START applicant={applicant_id} mock={mock} keys={list(df_row.keys())}")
+    print(f"DEBUG sample_text (truncated, 1000 chars): {repr(sample_text)[:400]}")  # truncated so logs stay readable
+
     prompt_base = f"Applicant data: {json.dumps(df_row, ensure_ascii=False)}\nAnalyze for: summary, risky phrases, contradictions, sentiment."
 
     modes = ["summary", "extract_risky", "detect_contradictions", "sentiment"]
@@ -225,6 +233,7 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
             "contradiction_flag": pre.get("contradiction_flag", 0),
             "credibility_score": pre.get("credibility_score", 0.0),
         }
+        print(f"DEBUG: returning precomputed features for applicant={applicant_id}")
         return {"parsed": parsed, "features": features}
 
     for mode in modes:
@@ -235,14 +244,12 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
             if mock:
                 pre = _read_precomputed_features(applicant_id)
                 if pre is not None:
-                    # create minimal parsed structures consistent with feature_extraction expectations
                     parsed = {
                         "summary": {"summary": "(precomputed)", "confidence": 0.5},
                         "extract_risky": {"risky_phrases": [], "count": pre.get("risky_phrase_count", 0)},
                         "detect_contradictions": {"contradictions": [], "flag": pre.get("contradiction_flag", 0)},
                         "sentiment": {"sentiment": "neutral", "score": pre.get("sentiment_score", 0.0)},
                     }
-                    # we have all features already: return early
                     features = {
                         "applicant_id": applicant_id,
                         "sentiment_score": pre.get("sentiment_score", 0.0),
@@ -279,8 +286,8 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                     kwargs['temperature'] = 0.0
                 if 'use_cache' in params:
                     kwargs['use_cache'] = True
-                
-                # --- EDITED: Pass 'mock' state to the LLM call ---
+
+                # Ensure we forward the mock flag if the handler supports it.
                 if 'mock' in params:
                     kwargs['mock'] = mock
 
@@ -288,41 +295,51 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                 # that only accept a prompt string.
                 prompt_for_call = f"Mode: {mode}\n" + prompt_base
 
+                # DEBUG: show what we're about to send to the handler (truncated)
+                try:
+                    dbg_prompt = prompt_for_call if len(prompt_for_call) < 1000 else prompt_for_call[:1000] + "..."
+                    print(f"DEBUG calling llm_handler func name={getattr(func, '__name__', str(func))} mode={mode} mock={mock} prompt_excerpt={repr(dbg_prompt)[:400]}")
+                except Exception:
+                    pass
+
                 raw = None
-                # Call the function, dynamically handling arguments
-                # We prioritize passing kwargs and try falling back to positional arguments
+                # Call the function, dynamically handling arguments.
+                # Prefer keyword-call if handler supports kwargs; otherwise try common positional signatures.
                 try:
                     if kwargs:
-                        # If handler accepts 'mode' as kwarg, we pass the base prompt.
-                        # Otherwise, we pass the enriched prompt.
+                        # If handler accepts 'mode' as kwarg, pass the base prompt or prompt depending on handler expectations.
                         raw = func(prompt_base if 'mode' in kwargs else prompt_for_call, **kwargs)
                     else:
-                        raw = func(prompt_for_call)
-                except TypeError:
-                    # Fallback on positional arguments if kwargs fail, using original logic
-                    # Try prompt-only
-                    try:
-                        raw = func(prompt_for_call)
-                    except Exception:
-                        # Try common positional orders as last resorts
-                        tried = False
+                        # Try several positional argument orders, including the common one with mock at the end.
                         try:
-                            # Try positional: prompt, mode, temperature, use_cache, mock
                             raw = func(prompt_for_call, mode, 0.0, True, mock)
-                            tried = True
-                        except Exception:
-                            pass
-                        if not tried:
+                        except TypeError:
                             try:
-                                # Try positional: prompt, mode
-                                raw = func(prompt_for_call, mode)
-                            except Exception:
-                                # Final fallback: call with original prompt_base
-                                raw = func(prompt_base)
+                                raw = func(prompt_for_call, mode, 0.0, True)
+                            except TypeError:
+                                try:
+                                    raw = func(prompt_for_call, mode)
+                                except TypeError:
+                                    raw = func(prompt_for_call)
+                except TypeError as te:
+                    # Last-resort positional attempts already tried; re-raise to handled by outer except
+                    raise te
 
                 parsed_val = _safe_json_load(raw)
                 # Normalize plain-text or unexpected outputs into expected dict shapes
                 parsed[mode] = _normalize_llm_raw_output(mode, parsed_val, raw)
+
+                # DEBUG: print what we received (raw truncated + parsed snippet)
+                try:
+                    raw_dbg = (raw if raw is not None else '')[:1000]
+                except Exception:
+                    raw_dbg = "<unprintable>"
+                print(f"DEBUG llm raw (truncated) mode={mode} applicant={applicant_id}: {repr(raw_dbg)[:400]}")
+                try:
+                    print(f"DEBUG parsed[mode] mode={mode} applicant={applicant_id}: {json.dumps(parsed[mode], ensure_ascii=False)[:800]}")
+                except Exception:
+                    print(f"DEBUG parsed[mode] (unserializable) mode={mode} applicant={applicant_id}")
+
                 break
             except Exception as e:
                 last_exc = e
@@ -332,11 +349,11 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                 if any(x in msg for x in ("connection refused", "httpconnectionpool", "failed to establish a new connection", "max retries exceeded")):
                     print(f"WARNING: LLM provider unreachable ({e}); falling back to mock for mode={mode}")
                     try:
-                        # Attempt a mock call to obtain canned output
+                        # Attempt a mock call to obtain canned output; ensure we ask for mock explicitly if handler supports it.
                         if 'mock' in params:
-                            raw = func(prompt_for_call if 'mode' in kwargs else prompt_for_call, **{**kwargs, 'mock': True})
+                            mock_kwargs = {**kwargs, 'mock': True}
+                            raw = func(prompt_for_call if 'mode' in kwargs else prompt_for_call, **mock_kwargs)
                         else:
-                            # best-effort: call handler with single arg and assume it will return mock when asked
                             raw = func(prompt_for_call)
                         parsed_val = _safe_json_load(raw)
                         parsed[mode] = _normalize_llm_raw_output(mode, parsed_val, raw)
@@ -355,7 +372,7 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
             raise RuntimeError(f"LLM extraction failed for applicant {applicant_id} mode={mode}: {last_exc}")
 
     # Map parsed outputs to numeric features (same logic as feature_extraction mapper)
-    # --- NEW: Augment parsed outputs with simple text-based fallbacks ---
+    # --- Augment parsed outputs with simple text-based fallbacks ---
     def _augment_parsed_with_text(parsed: Dict[str, Any], text: str) -> Dict[str, Any]:
         """Ensure parsed contains risky/contradiction signals by scanning raw text as a fallback."""
         try:
@@ -396,6 +413,7 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
         parsed = _augment_parsed_with_text(parsed, text_notes)
     except Exception:
         pass
+
     # sentiment
     sent = parsed.get("sentiment", {})
     if isinstance(sent, dict):
@@ -434,8 +452,8 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
     except Exception:
         pass
 
+    print(f"DEBUG run_feature_extraction END applicant={applicant_id} -> risky_count={risky_count} sentiment={sentiment_score} mock={mock}")
     return {"parsed": parsed, "features": features}
-
 
 def expand_parsed_to_fields(parsed: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize a parsed LLM output into flat fields used by the app/UI.
