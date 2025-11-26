@@ -1,4 +1,5 @@
-# (Updated to include safe Gemini init and a per-word/per-chunk helper)
+# llms/backend/llm_handler.py
+
 import os
 import json
 import time
@@ -60,72 +61,8 @@ def _safe_extract_json(text: str) -> Any:
     except Exception:
         return s
 
-# Add this function to llms/backend/llm_handler.py
 
-def process_text_word_by_word(
-    text: str,
-    mode: str,
-    chunk_size_words: int = 20,
-    temperature: float = 0.0,
-    mock: bool = False
-) -> List[Dict[str, Any]]:
-    """
-    Splits text into chunks, calls the LLM for each chunk, and collects results.
-
-    The function uses the existing `call_llm` to perform the actual API call.
-    """
-    
-    # Simple tokenization by splitting on whitespace
-    words = text.split()
-    
-    results = []
-    
-    # Iterate over the words in chunks
-    for i in range(0, len(words), chunk_size_words):
-        chunk_words = words[i:i + chunk_size_words]
-        chunk_text = " ".join(chunk_words)
-        
-        # Determine the start and end word indices (helpful for debugging/context)
-        start_index = i
-        end_index = i + len(chunk_words) - 1
-
-        try:
-            # 1. Call the existing core LLM function
-            raw_output = call_llm(
-                prompt=chunk_text,
-                mode=mode,
-                temperature=temperature,
-                use_cache=True,
-                mock=mock
-            )
-            
-            # 2. Safely parse the raw JSON output
-            parsed_output = _safe_extract_json(raw_output)
-
-            results.append({
-                "chunk_text": chunk_text,
-                "word_start": start_index,
-                "word_end": end_index,
-                "raw": raw_output,
-                "parsed": parsed_output
-            })
-            
-        except Exception as e:
-            # Handle API errors or parsing failures for this chunk gracefully
-            results.append({
-                "chunk_text": chunk_text,
-                "word_start": start_index,
-                "word_end": end_index,
-                "error": str(e)
-            })
-            # Log the error, but continue processing subsequent chunks
-            logging.error(f"Error processing chunk {i}: {e}")
-
-    return results
-
-# NOTE: You must also ensure you import List and Dict at the top of the file:
-# from typing import Any, Optional, List, Dict
-
+## 1. CORE LLM CALL FUNCTION (Must be defined before process_text_word_by_word)
 def call_llm(
     prompt: str,
     mode: str = "summary",
@@ -157,8 +94,6 @@ def call_llm(
     logger.setLevel(logging.DEBUG)
 
     provider = os.getenv("LLM_PROVIDER", "gemini").lower()
-    # real API key (if needed elsewhere)
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
 
     # --- GEMINI / GOOGLE AI PROVIDER ---
     if provider in ("gemini", "google", "google_ai") and GEMINI_CLIENT:
@@ -221,10 +156,9 @@ def call_llm(
         if last_exc:
             raise RuntimeError(f"Gemini LLM provider call failed after 3 attempts: {last_exc}")
 
-    # The rest of the providers (ollama, huggingface, openai) remain unchanged;
-    # for brevity, raise if they are selected but not implemented here.
+    # The rest of the providers (ollama, huggingface, openai)
     if provider in ("ollama", "ollema", "local", "ollama_http"):
-        raise RuntimeError("Ollama/local provider selected but not available in this environment.")
+        raise RuntimeError("Ollama/local provider selected but not available in this environment. Please use 'gemini'.")
     if provider in ("huggingface", "hf", "hugging_face"):
         raise RuntimeError("HuggingFace provider selected but not implemented here.")
     api_key = os.getenv("OPENAI_API_KEY")
@@ -238,6 +172,9 @@ def call_llm(
     )
 
 
+---
+
+## 2. CHUNKING HELPER FUNCTION (Now placed last)
 def process_text_word_by_word(
     text: str,
     mode: str = "extract_risky",
@@ -248,7 +185,7 @@ def process_text_word_by_word(
     """Process `text` in word-based (or chunk-based) units.
 
     Returns a list of dicts:
-      [{'chunk': 'word_or_chunk', 'raw': raw_model_text, 'parsed': parsed_json_or_text, 'error': None}, ...]
+      [{'chunk_text': 'word_or_chunk', 'raw': raw_model_text, 'parsed': parsed_json_or_text, 'error': None, 'word_start': 0, 'word_end': 0}, ...]
 
     chunk_size_words: number of words per LLM call. 1 = per-word. Use larger values for speed and lower cost.
     """
@@ -256,73 +193,72 @@ def process_text_word_by_word(
     if not isinstance(text, str) or not text.strip():
         return results
 
-    if mock:
-        # Return simple mocked responses for each chunk
-        words = text.split()
-        for i in range(0, len(words), chunk_size_words):
-            chunk = " ".join(words[i:i + chunk_size_words])
-            # a small canned structure to mimic the real extractor
-            if mode == "extract_risky":
-                parsed = {"risky_phrases": [], "count": 0}
-            elif mode == "sentiment":
-                parsed = {"sentiment": "neutral", "score": 0.0}
-            else:
-                parsed = {"raw": chunk}
-            results.append({"chunk": chunk, "raw": json.dumps(parsed), "parsed": parsed, "error": None})
-        return results
-
     # split into chunks of words
     words = text.split()
-    chunks = [" ".join(words[i:i + chunk_size_words]) for i in range(0, len(words), chunk_size_words)]
+    
+    # For each chunk, call call_llm with a focused prompt
+    for i in range(0, len(words), chunk_size_words):
+        chunk_words = words[i:i + chunk_size_words]
+        chunk_text = " ".join(chunk_words)
+        
+        start_index = i
+        end_index = i + len(chunk_words) - 1
 
-    # For each chunk, call Gemini with a small focused prompt
-    for chunk in chunks:
         # Construct a minimal prompt for the chunk depending on mode
         if mode == "extract_risky":
-            prompt = f"Inspect this text fragment and return JSON: {{'risky_phrases': ['...'], 'count': 0}}. Fragment: \"{chunk}\". Return only JSON."
+            prompt = f"Inspect this text fragment and return JSON: {{'risky_phrases': ['...'], 'count': 0}}. Fragment: \"{chunk_text}\". Return only JSON."
         elif mode == "sentiment":
-            prompt = f"Return sentiment as JSON like: {{'sentiment': 'neutral','score': 0.0}} for the fragment: \"{chunk}\". Return only JSON."
+            prompt = f"Return sentiment as JSON like: {{'sentiment': 'neutral','score': 0.0}} for the fragment: \"{chunk_text}\". Return only JSON."
         elif mode == "summary":
-            prompt = f"Short summary JSON: {{'summary':'...','confidence':0.0}} of this fragment: \"{chunk}\". Return only JSON."
+            prompt = f"Short summary JSON: {{'summary':'...','confidence':0.0}} of this fragment: \"{chunk_text}\". Return only JSON."
         else:
-            prompt = f"Analyze and return JSON for fragment: \"{chunk}\". Return only JSON."
+            prompt = f"Analyze and return JSON for fragment: \"{chunk_text}\". Return only JSON."
 
         try:
-            parsed = None
-            raw = None
-            # Reuse call_llm flow for gemini — but we want to avoid duplication and keep retries consistent.
-            # Directly use GEMINI_CLIENT here for lower overhead and more control:
-            if GEMINI_CLIENT:
-                try:
-                    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-                    resp = GEMINI_CLIENT.models.generate_content(
-                        model=model,
-                        contents=[
-                            types.Content(role="user", parts=[types.Part.from_text(prompt)]),
-                        ],
-                        config=types.GenerateContentConfig(
-                            temperature=temperature,
-                            system_instruction="You are a lightweight extractor. Return only JSON."
-                        )
-                    )
-                    raw = resp.text
-                    parsed = _safe_extract_json(raw)
-                except Exception as e:
-                    # fallback to call_llm (which also does retries)
-                    logging.exception("Direct Gemini call failed for chunk, falling back to call_llm.")
-                    raw = call_llm(prompt, mode=mode, temperature=temperature, mock=False)
-                    parsed = _safe_extract_json(raw)
-            else:
-                raise RuntimeError("Gemini client not initialized; ensure GEMINI_API_KEY is set and genai is available.")
-            results.append({"chunk": chunk, "raw": raw, "parsed": parsed, "error": None})
+            # 1. Call the existing core LLM function
+            raw_output = call_llm(
+                prompt=prompt, # Pass the focused prompt, not just chunk_text
+                mode=mode,
+                temperature=temperature,
+                use_cache=True,
+                mock=mock
+            )
+            
+            # 2. Safely parse the raw JSON output
+            parsed_output = _safe_extract_json(raw_output)
+
+            results.append({
+                "chunk_text": chunk_text,
+                "word_start": start_index,
+                "word_end": end_index,
+                "raw": raw_output,
+                "parsed": parsed_output,
+                "error": None
+            })
+            
         except Exception as e:
-            logging.exception("Error calling LLM on chunk")
-            results.append({"chunk": chunk, "raw": None, "parsed": None, "error": str(e)})
+            # Handle API errors or parsing failures for this chunk gracefully
+            results.append({
+                "chunk_text": chunk_text,
+                "word_start": start_index,
+                "word_end": end_index,
+                "raw": None,
+                "parsed": None,
+                "error": str(e)
+            })
+            # Log the error, but continue processing subsequent chunks
+            logging.error(f"Error processing chunk {i}: {e}")
 
     return results
-
 
 if __name__ == '__main__':
     prompt = "Name: Test; free_text: I run a small cafe and sometimes miss payments"
     # Example quick test. Ensure GEMINI_API_KEY and LLM_PROVIDER are configured if not using mock.
     print(call_llm(prompt, mode='summary', mock=True))
+    
+    # Test the chunking function using mock data
+    long_text = "The applicant has a strong history of high revenue but noted several late credit card payments in the past year."
+    print("\nChunking test (mock=True):")
+    chunk_results = process_text_word_by_word(long_text, mode='extract_risky', chunk_size_words=5, mock=True)
+    for result in chunk_results:
+        print(f"Chunk: '{result.get('chunk_text')}' -> Parsed: {result.get('parsed')}")
