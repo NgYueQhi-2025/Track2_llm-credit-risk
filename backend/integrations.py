@@ -1,111 +1,373 @@
-# --- ASSUMING THIS IS INSIDE integrations.py ---
-# Make sure you have the following imports at the top of your integrations.py
+import csv
+import json
 import os
-import io
 import time
-from google import genai
-from PIL import Image
-from typing import Optional, Dict
+from typing import Any, Dict, Optional
 
-# Initialize Gemini Client (ensure GEMINI_API_KEY is set in environment or loaded)
+import importlib.util
+import joblib
+import inspect
+
+
+# Attempt to import the LLM handler from the `llms` package; if the
+# handler file doesn't have a standard .py extension or the package
+# isn't importable, fall back to loading it by file path so the demo
+# still runs.
 try:
-    # Use GEMINI_API_KEY from environment or Streamlit secrets, as handled in main.py
-    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-    if GEMINI_API_KEY:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        MODEL_NAME = "gemini-2.5-flash"
+    from llms.backend import llm_handler
+except Exception:
+    llm_path = os.path.join(os.path.dirname(__file__), "..", "llms", "backend", "llm_handler.py")
+    llm_path = os.path.normpath(llm_path)
+    if os.path.exists(llm_path):
+            # Try to load via importlib; if that fails (e.g. file has no .py
+            # extension and spec.loader is None), fall back to executing the
+            # source text into a new module namespace.
+            spec = importlib.util.spec_from_file_location("llm_handler", llm_path)
+            if spec is not None and spec.loader is not None:
+                llm_handler = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(llm_handler)
+            else:
+                # Read source and exec into module
+                import types
+
+                llm_handler = types.ModuleType("llm_handler")
+                # populate typical module attributes so code using __file__ or
+                # __package__ behaves as expected
+                llm_handler.__file__ = llm_path
+                llm_handler.__package__ = "llms.backend"
+                llm_handler.__name__ = "llms.backend.llm_handler"
+                with open(llm_path, "r", encoding="utf-8") as f:
+                    src = f.read()
+                exec(compile(src, llm_path, "exec"), llm_handler.__dict__)
     else:
-        # Fallback for mock or local testing without key
-        client = None
-        MODEL_NAME = "mock-model"
-except Exception as e:
-    # Handle error during client initialization
-    client = None
-    MODEL_NAME = "error"
+        # Last resort: raise the original import error for visibility
+        raise ImportError(f"Could not import or load llm_handler from {llm_path}")
+
+# Attempt to import a compatibility adapter that provides a canonical
+# `call_llm(prompt, mode=..., temperature=..., use_cache=..., mock=...)`
+# If available, we'll prefer that to reduce signature mismatches.
+try:
+    from llms.backend import call_llm_compat as llm_compat
+    _CALL_LLM_FUNC = getattr(llm_compat, 'call_llm')
+except Exception:
+    _CALL_LLM_FUNC = None
 
 
-def analyze_file_with_gemini(
-    file_bytes: bytes,
-    file_name: str,
-    mime_type: str,
-) -> str:
-    """
-    Uploads a file (PDF/Image) to Gemini Files API for processing and
-    requests risk analysis on the content.
+MODEL_PATHS = [
+    os.path.join(os.path.dirname(__file__), "artifacts", "model.pkl"),
+    os.path.join(os.path.dirname(__file__), "artifacts", "model.joblib"),
+    os.path.join(os.path.dirname(__file__), "..", "model.pkl"),
+]
 
-    Returns the extracted text content or a summary of the analysis.
-    """
-    if not client:
-        return f"[Error: Gemini Client not initialized. Check API Key.]"
-
-    # Define the multimodal prompt for text extraction and risk analysis
-    RISK_ANALYSIS_PROMPT = (
-        "You are an expert document analyst. Extract ALL readable text content "
-        "from the provided document (PDF/Image). After extracting the full text, "
-        "identify and list any high-risk financial or behavioral keywords (e.g., "
-        "'fraud', 'illegal', 'debt', 'gambling', 'bankruptcy', 'lawsuit', 'eviction'). "
-        "Format the output strictly as JSON with two keys: 'full_text' (string) "
-        "and 'risky_keywords' (list of strings). If no text is found, set 'full_text' to 'None'."
-    )
-    
-    uploaded_gemini_file = None
-    
-    # 1. Use the Files API for PDFs and large files
-    if mime_type == 'application/pdf':
-        try:
-            # Upload the file bytes to the Gemini Files API
-            file_to_upload = io.BytesIO(file_bytes)
-            uploaded_gemini_file = client.files.upload(
-                file=file_to_upload,
-                mime_type=mime_type
-            )
-            
-            # The prompt contents include the uploaded file object and the instruction text
-            contents = [uploaded_gemini_file, RISK_ANALYSIS_PROMPT]
-            
-        except Exception as e:
-            # Handle upload failure
-            return f"[File API Upload Error for {file_name}: {e}]"
-            
-    # 2. Use Direct Part for Images (smaller files can be passed directly)
-    elif mime_type.startswith('image/'):
-        try:
-            # Convert bytes to PIL Image object
-            image = Image.open(io.BytesIO(file_bytes))
-            contents = [image, RISK_ANALYSIS_PROMPT]
-        except Exception as e:
-            return f"[Image Processing Error for {file_name}: {e}]"
-
-    else:
-        return f"[Analysis Skipped: Unsupported MIME type {mime_type}]"
+ARTIFACT_FEATURES = os.path.join(os.path.dirname(__file__), "artifacts", "features.csv")
 
 
-    # --- Call the Generative Model ---
+def _read_precomputed_features(applicant_id: str) -> Optional[Dict[str, Any]]:
+    """Return a features dict for applicant_id if found in ARTIFACT_FEATURES; else None."""
+    if not os.path.exists(ARTIFACT_FEATURES):
+        return None
     try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=contents,
-            config=types.GenerateContentConfig(response_mime_type="application/json") # Request JSON output
-        )
-        
-        # Attempt to parse the JSON response text
-        try:
-            import json
-            # The model should return text that is valid JSON
-            parsed_json = json.loads(response.text)
-            full_text = parsed_json.get("full_text", f"[JSON Error: Missing 'full_text' key]")
-            
-            # Keep only the first 2000 characters for the 'text_notes' field in the DataFrame
-            return (full_text[:2000] + "...") if len(full_text) > 2000 else full_text
-            
-        except json.JSONDecodeError:
-            return f"[JSON Parsing Error: Model did not return valid JSON. Raw output: {response.text[:500]}...]"
+        with open(ARTIFACT_FEATURES, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                if str(r.get("applicant_id")) == str(applicant_id):
+                    # cast numeric fields
+                    return {
+                        "applicant_id": r.get("applicant_id"),
+                        "sentiment_score": float(r.get("sentiment_score", 0.0)),
+                        "risky_phrase_count": int(r.get("risky_phrase_count", 0)),
+                        "contradiction_flag": int(r.get("contradiction_flag", 0)),
+                        "credibility_score": float(r.get("credibility_score", 0.0)),
+                    }
+    except Exception:
+        return None
+    return None
 
-    except Exception as e:
-        return f"[Gemini API Call Error: {e}]"
-        
-    finally:
-        # CRITICAL: Clean up the file from the API service if it was uploaded
-        if uploaded_gemini_file:
-            client.files.delete(name=uploaded_gemini_file.name)
-            # time.sleep(0.5) # Optional: short delay for cleanup
+
+def _safe_json_load(s: str) -> Any:
+    if not isinstance(s, str):
+        return s
+    s = s.strip()
+    # Try to extract a JSON object substring
+    start = s.find("{")
+    end = s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = s[start:end+1]
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+    # fallback direct load
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+
+
+def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retries: int = 3) -> Dict[str, Any]:
+    """Call LLM to extract structured outputs for a single applicant row.
+
+    Returns a dict containing parsed LLM outputs and derived numeric features.
+
+    - df_row: mapping of applicant fields (e.g. id, name, age, income, free_text...)
+    - mock: when True the `llm_handler` will return canned responses
+    - max_retries: retries for transient failures
+    """
+    applicant_id = str(df_row.get("id", "unknown"))
+
+    prompt_base = f"Applicant data: {json.dumps(df_row, ensure_ascii=False)}\nAnalyze for: summary, risky phrases, contradictions, sentiment."
+
+    modes = ["summary", "extract_risky", "detect_contradictions", "sentiment"]
+    parsed: Dict[str, Any] = {}
+
+    for mode in modes:
+        attempt = 0
+        last_exc = None
+        while attempt < max_retries:
+            # If mock and a precomputed artifact exists, use it for speed and determinism
+            if mock:
+                pre = _read_precomputed_features(applicant_id)
+                if pre is not None:
+                    # create minimal parsed structures consistent with feature_extraction expectations
+                    parsed = {
+                        "summary": {"summary": "(precomputed)", "confidence": 0.5},
+                        "extract_risky": {"risky_phrases": [], "count": pre.get("risky_phrase_count", 0)},
+                        "detect_contradictions": {"contradictions": [], "flag": pre.get("contradiction_flag", 0)},
+                        "sentiment": {"sentiment": "neutral", "score": pre.get("sentiment_score", 0.0)},
+                    }
+                    # we have all features already: return early
+                    features = {
+                        "applicant_id": applicant_id,
+                        "sentiment_score": pre.get("sentiment_score", 0.0),
+                        "risky_phrase_count": pre.get("risky_phrase_count", 0),
+                        "contradiction_flag": pre.get("contradiction_flag", 0),
+                        "credibility_score": pre.get("credibility_score", 0.0),
+                    }
+                    return {"parsed": parsed, "features": features}
+
+            try:
+                # Call the LLM handler in a backwards-compatible way. Prefer
+                # the compatibility adapter if present; else use the raw
+                # llm_handler.call_llm function.
+                func = _CALL_LLM_FUNC if _CALL_LLM_FUNC is not None else getattr(llm_handler, 'call_llm')
+
+                # Gather handler metadata and signature
+                try:
+                    handler_file = getattr(llm_handler, '__file__', str(llm_handler))
+                except Exception:
+                    handler_file = str(llm_handler)
+                try:
+                    sig = inspect.signature(func)
+                    params = sig.parameters
+                except Exception:
+                    sig = None
+                    params = {}
+                print(f"DEBUG: Using llm_handler at {handler_file} with signature: {sig}")
+
+                # Build kwargs only for parameters that actually exist on the function.
+                kwargs = {}
+                if 'temperature' in params:
+                    kwargs['temperature'] = 0.0
+                if 'use_cache' in params:
+                    kwargs['use_cache'] = True
+                
+                # --- EDITED: Pass 'mock' state to the LLM call ---
+                if 'mock' in params:
+                    kwargs['mock'] = mock
+
+                # Ensure the prompt explicitly states the mode for handlers
+                # that only accept a prompt string.
+                prompt_for_call = f"Mode: {mode}\n" + prompt_base
+
+                raw = None
+                # First attempt: call with kwargs if any
+                try:
+                    if kwargs:
+                        # If handler accepts 'mode' as kwarg it will be passed via kwargs
+                        raw = func(prompt_for_call if 'mode' not in params else prompt_base, **kwargs)
+                    else:
+                        raw = func(prompt_for_call)
+                except TypeError:
+                    # Try prompt-only
+                    try:
+                        raw = func(prompt_for_call)
+                    except Exception:
+                        # Try common positional orders as last resorts
+                        tried = False
+                        try:
+                            # Try positional: prompt, mode, temperature, use_cache, mock
+                            raw = func(prompt_for_call, mode, 0.0, True, mock)
+                            tried = True
+                        except Exception:
+                            pass
+                        if not tried:
+                            try:
+                                # Try positional: prompt, mode
+                                raw = func(prompt_for_call, mode)
+                            except Exception:
+                                # Final fallback: call with original prompt_base
+                                raw = func(prompt_base)
+
+                parsed_val = _safe_json_load(raw)
+                parsed[mode] = parsed_val
+                break
+            except Exception as e:
+                last_exc = e
+                attempt += 1
+                wait = 0.5 * (2 ** attempt)
+                time.sleep(wait)
+        else:
+            # all retries failed
+            raise RuntimeError(f"LLM extraction failed for applicant {applicant_id} mode={mode}: {last_exc}")
+
+    # Map parsed outputs to numeric features (same logic as feature_extraction mapper)
+    # sentiment
+    sent = parsed.get("sentiment", {})
+    if isinstance(sent, dict):
+        sentiment_score = float(sent.get("score", 0.0))
+    else:
+        sentiment_score = 0.0
+
+    # risky
+    risky = parsed.get("extract_risky", {})
+    if isinstance(risky, dict):
+        risky_count = int(risky.get("count", len(risky.get("risky_phrases", []))))
+    else:
+        risky_count = 0
+
+    # contradictions
+    contra = parsed.get("detect_contradictions", {})
+    contradiction_flag = int(contra.get("flag", 0)) if isinstance(contra, dict) else 0
+
+    # credibility_score heuristic
+    summary = parsed.get("summary", {})
+    conf = float(summary.get("confidence", 0.5)) if isinstance(summary, dict) else 0.5
+    credibility_score = max(0.0, min(1.0, conf - 0.3 * contradiction_flag - 0.05 * risky_count))
+
+    features = {
+        "applicant_id": applicant_id,
+        "sentiment_score": sentiment_score,
+        "risky_phrase_count": risky_count,
+        "contradiction_flag": contradiction_flag,
+        "credibility_score": credibility_score,
+    }
+
+    return {"parsed": parsed, "features": features}
+
+
+def expand_parsed_to_fields(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a parsed LLM output into flat fields used by the app/UI.
+
+    Returns a dict with keys:
+      - summary: text or None
+      - sentiment_score: float
+      - risky_phrases: list
+      - risky_phrase_count: int
+      - contradiction_flag: int
+      - credibility_score: float
+    """
+    out = {
+        "summary": None,
+        "sentiment_score": None,
+        "risky_phrases": None,
+        "risky_phrase_count": None,
+        "contradiction_flag": None,
+        "credibility_score": None,
+    }
+    if not isinstance(parsed, dict):
+        return out
+
+    # summary
+    summary = parsed.get("summary")
+    if isinstance(summary, dict):
+        out["summary"] = summary.get("summary")
+    elif isinstance(summary, str):
+        out["summary"] = summary
+
+    # sentiment
+    sent = parsed.get("sentiment")
+    if isinstance(sent, dict):
+        try:
+            out["sentiment_score"] = float(sent.get("score", None))
+        except Exception:
+            out["sentiment_score"] = None
+    elif isinstance(sent, (int, float)):
+        out["sentiment_score"] = float(sent)
+
+    # risky phrases
+    risky = parsed.get("extract_risky") or parsed.get("risky")
+    if isinstance(risky, dict):
+        rp = risky.get("risky_phrases") or risky.get("phrases") or []
+        if isinstance(rp, str):
+            # try to parse comma-separated string
+            rp_list = [p.strip() for p in rp.split(",") if p.strip()]
+        elif isinstance(rp, (list, tuple)):
+            rp_list = list(rp)
+        else:
+            rp_list = []
+        out["risky_phrases"] = rp_list
+        try:
+            out["risky_phrase_count"] = int(risky.get("count", len(rp_list)))
+        except Exception:
+            out["risky_phrase_count"] = len(rp_list)
+
+    # contradictions
+    contra = parsed.get("detect_contradictions") or parsed.get("contradictions")
+    if isinstance(contra, dict):
+        out["contradiction_flag"] = int(contra.get("flag", 0)) if contra.get("flag") is not None else (1 if contra.get("contradictions") else 0)
+
+    # credibility score fallback (if present in parsed features)
+    if out.get("credibility_score") is None:
+        # try to derive from summary confidence if available
+        if isinstance(summary, dict) and summary.get("confidence") is not None:
+            try:
+                out["credibility_score"] = max(0.0, min(1.0, float(summary.get("confidence", 0.0))))
+            except Exception:
+                out["credibility_score"] = None
+
+    return out
+
+
+def predict(features: Dict[str, Any]) -> Dict[str, Any]:
+    """Given a features mapping, return a predicted risk score and label.
+
+    Attempts to load a trained model from known artifact locations; if not found,
+    falls back to a deterministic heuristic scoring function.
+    """
+    model = None
+    for p in MODEL_PATHS:
+        if os.path.exists(p):
+            try:
+                model = joblib.load(p)
+                break
+            except Exception:
+                model = None
+
+    # Convert features to vector in expected order
+    vec = [
+        float(features.get("sentiment_score", 0.0)),
+        float(features.get("risky_phrase_count", 0.0)),
+        float(features.get("contradiction_flag", 0.0)),
+        float(features.get("credibility_score", 0.0)),
+    ]
+
+    if model is not None:
+        try:
+            # Assumes model.predict_proba returns [proba_class_0, proba_class_1]
+            score = float(model.predict_proba([vec])[0][1])
+        except Exception:
+            # model present but interface unexpected; fallback
+            score = None
+    else:
+        score = None
+
+    if score is None:
+        # simple deterministic heuristic: higher risky count and low credibility -> higher risk
+        # adjusted weights to make risky phrases and contradictions more influential for demo clarity
+        # score = 0.55 * (Risky Count / (1 + Risky Count)) + 0.25 * (1 - Credibility Score) + 0.20 * Contradiction Flag
+        score = max(0.0, min(1.0, 0.55 * (vec[1] / (1 + vec[1])) + 0.25 * (1 - vec[3]) + 0.20 * vec[2]))
+
+    # lower the threshold slightly so borderline cases surface as 'high' in demos
+    label = "low" if score < 0.45 else "high"
+
+    return {"score": float(score), "risk_label": label}
