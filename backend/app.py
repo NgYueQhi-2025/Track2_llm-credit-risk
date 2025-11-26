@@ -139,7 +139,7 @@ def extract_sentiment(
 # ============================================================================
 # This section runs when the file is executed with `streamlit run backend/app.py`
 
-if __name__ == "__main__" or os.getenv("STREAMLIT_RUNTIME"):
+if __name__ == "__main__" or os.getenv("STREAMLIT_RUNTIME") is not None:
     # Only import streamlit if we're running as a Streamlit app
     try:
         import streamlit as st
@@ -172,9 +172,9 @@ if __name__ == "__main__" or os.getenv("STREAMLIT_RUNTIME"):
         
         # Main input area
         st.header("📝 Input Text")
-        sample_text = """I run a small business with annual revenue of $150,000. 
-        I've had some late payments in the past due to cash flow issues. 
-        Currently seeking a loan to expand operations."""
+        sample_text = """I run a small business with annual revenue of $150,000.
+I've had some late payments in the past due to cash flow issues.
+Currently seeking a loan to expand operations."""
         
         input_text = st.text_area(
             "Enter text to analyze:",
