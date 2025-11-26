@@ -349,6 +349,8 @@ def main() -> None:
             for f in uploaded_files:
                 text = extract_text_from_file(f)
                 parsed = parse_fields_from_text(text, getattr(f, 'name', ''))
+                # Store extracted text in 'text_notes' for feature extraction to analyze
+                full_text = parsed.get('text_notes') or text
                 row = {
                     'id': next_id,
                     'name': parsed.get('name') or getattr(f, 'name', '') or f"applicant_{next_id}",
@@ -356,7 +358,8 @@ def main() -> None:
                     'income': parsed.get('income'),
                     'requested_loan': parsed.get('requested_loan'),
                     'credit_score': None,
-                    'text_notes': parsed.get('text_notes') or text,
+                    'text_notes': full_text,  # Full text for LLM analysis
+                    'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
                 }
                 rows.append(row)
                 next_id += 1
@@ -434,18 +437,17 @@ def main() -> None:
                 summary_text = r.get('summary')
                 parsed = r.get('_parsed', {}) if isinstance(r.get('_parsed', {}), dict) else {}
             else:
-                # If mock_mode is on, run a fast mock extraction for a better preview
-                if mock_mode:
-                    try:
-                        ext = integrations.run_feature_extraction(r.to_dict(), mock=True)
-                        parsed = ext.get('parsed', {}) if isinstance(ext.get('parsed', {}), dict) else {}
-                        feats = ext.get('features', {}) if isinstance(ext.get('features', {}), dict) else {}
-                        summary = parsed.get('summary', {}) if isinstance(parsed, dict) else {}
-                        summary_text = summary.get('summary') if isinstance(summary, dict) else None
-                    except Exception:
-                        parsed = {}
-                        summary_text = None
-                else:
+                # If summary is missing, call run_feature_extraction with current mock_mode setting
+                # to provide a preview (mock=True gives fast canned output, mock=False calls real LLM)
+                try:
+                    ext = integrations.run_feature_extraction(r.to_dict(), mock=mock_mode)
+                    # Safely extract parsed dict and ensure it's actually a dict
+                    parsed = ext.get('parsed', {}) if isinstance(ext.get('parsed', {}), dict) else {}
+                    feats = ext.get('features', {}) if isinstance(ext.get('features', {}), dict) else {}
+                    summary = parsed.get('summary', {}) if isinstance(parsed, dict) else {}
+                    summary_text = summary.get('summary') if isinstance(summary, dict) else None
+                except Exception as e:
+                    # Defensive: if extraction fails for this applicant, use empty fallbacks
                     parsed = {}
                     summary_text = None
 
@@ -567,8 +569,12 @@ def main() -> None:
                     total = len(df)
                     for i, (_idx, row) in enumerate(df.iterrows(), start=1):
                         progress.progress(int((i - 1) / max(1, total) * 100))
-                        # extract features (may call LLM)
-                        res = integrations.run_feature_extraction(row.to_dict(), mock=mock_mode)
+                        # Extract features: pass mock_mode to control LLM usage (mock=True uses canned outputs)
+                        try:
+                            res = integrations.run_feature_extraction(row.to_dict(), mock=mock_mode)
+                        except Exception as e:
+                            # Defensive: if extraction fails, use fallback empty features
+                            res = {"features": {}, "parsed": {}}
                         features = res.get("features", {})
                         # keep parsed for UI explanations
                         parsed = res.get("parsed", {})
