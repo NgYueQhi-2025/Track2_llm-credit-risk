@@ -1,89 +1,119 @@
 import streamlit as st
 import os
-import json
-import joblib
-from backend.llm_handler import call_llm
-from backend.feature_extraction import extract_features
+from google import genai
+from google.genai import types
+from PIL import Image
+import io
+import mimetypes
 
-# 1. Page Config
-st.set_page_config(page_title="Credit Risk Analyzer", layout="wide")
-st.title("🏦 AI Credit Risk Analyzer")
+# --- Configuration ---
+# The API key must be set as an environment variable (GEMINI_API_KEY) or in Streamlit Secrets
+# For local testing, ensure you have: export GEMINI_API_KEY='YOUR_KEY'
+# Streamlit Cloud uses st.secrets
+if "GEMINI_API_KEY" not in os.environ and "GEMINI_API_KEY" in st.secrets:
+    os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 
-# 2. Sidebar for Configuration
-with st.sidebar:
-    st.header("Settings")
-    # This allows you to toggle the provider in the UI if you want
-    provider = st.radio("LLM Provider", ["Ollama (Local)", "OpenAI", "Mock"], index=0)
+try:
+    # Initialize the Gemini Client
+    client = genai.Client()
+    # gemini-2.5-flash is ideal for fast, multimodal tasks
+    MODEL_NAME = "gemini-2.5-flash"
+except Exception as e:
+    st.error(f"Error initializing Gemini client. Please check your GEMINI_API_KEY. Details: {e}")
+    st.stop()
+
+# --- Utility Function ---
+def get_generative_parts(uploaded_file, user_prompt):
+    """
+    Prepares the multimodal parts for the Gemini API call.
+    Converts Streamlit's UploadedFile into a types.Part object.
+    """
     
-    if provider == "Ollama (Local)":
-        base_url = st.text_input("Ollama URL", value=os.getenv("LOCAL_LLM_URL", "http://localhost:11434"))
-        # Dynamically update the environment variable for the session
-        os.environ["LLM_PROVIDER"] = "ollama"
-        os.environ["LOCAL_LLM_URL"] = base_url
-    elif provider == "OpenAI":
-        os.environ["LLM_PROVIDER"] = "openai"
-        api_key = st.text_input("OpenAI API Key", type="password")
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
-    else:
-        # Use mock mode
-        pass 
+    # 1. Get the raw bytes and MIME type from the Streamlit file
+    file_bytes = uploaded_file.read()
+    mime_type = uploaded_file.type
 
-# 3. Main Input Area
-st.subheader("Applicant Data")
-applicant_text = st.text_area("Paste applicant notes/emails here:", height=150, 
-    placeholder="e.g., Applicant owns a small cafe, revenue is consistent but missed one payment in 2022...")
-
-if st.button("Analyze Risk"):
-    if not applicant_text:
-        st.warning("Please enter some text first.")
+    # 2. Handle PDF files (which can be sent directly)
+    if mime_type == 'application/pdf':
+        media_part = types.Part.from_bytes(
+            data=file_bytes,
+            mime_type=mime_type
+        )
+    
+    # 3. Handle image files (using PIL/Pillow for robust handling)
+    elif mime_type in ['image/png', 'image/jpeg', 'image/jpg']:
+        image = Image.open(io.BytesIO(file_bytes))
+        media_part = image
+    
+    # 4. Handle unsupported files or as a fallback
     else:
-        with st.spinner("Consulting the AI Model..."):
+        st.warning(f"Unsupported file type: {mime_type}. Treating as text, which may fail.")
+        media_part = types.Part.from_bytes(
+            data=file_bytes,
+            mime_type='text/plain' # Fallback, but likely to fail for complex binary files
+        )
+
+    # The contents array is the media part plus the text prompt
+    contents = [media_part, user_prompt]
+    return contents
+
+
+# --- Streamlit UI and Logic ---
+st.title("📄 Risk Keyword Analyzer with Gemini")
+st.markdown("Upload a PDF, PNG, or JPG document for word-by-word risk analysis.")
+
+# Define the risk-scoring system and prompt
+RISK_PROMPT = """
+You are an expert risk analyst. Your task is to analyze the provided document (PDF/Image) word-by-word.
+Perform the following steps:
+1. Extract all text content from the document.
+2. Identify and list all words or phrases that represent a high risk (e.g., 'fraud', 'illegal', 'breach', 'embezzlement', 'money laundering', 'unauthorized access', 'confidentiality violation').
+3. For each high-risk keyword/phrase, quote the full sentence it appears in.
+4. Calculate a simple **Risk Score** from 0 to 100 based on the density and severity of the risky content.
+5. Present the final output in a clear Markdown format.
+
+**Format your final output STRICTLY as follows:**
+
+## Document Analysis Report
+**Total Word Count:** [Number of words in the document]
+**Identified High-Risk Keywords:** [List of keywords separated by commas]
+**Calculated Risk Score:** [Score]/100 (Explain the score in one sentence)
+
+### Quotations of Risky Content
+* Keyword: "..." | Sentence: "..."
+* Keyword: "..." | Sentence: "..."
+...
+"""
+
+# File Uploader
+uploaded_file = st.file_uploader(
+    "Upload Document (PDF, PNG, JPG/JPEG)", 
+    type=["pdf", "png", "jpg", "jpeg"]
+)
+
+if uploaded_file is not None:
+    st.image("image_6661fc.png", caption="Uploaded Document Preview (for image/PDF files)", width=300) 
+    
+    if st.button("Start Risk Analysis"):
+        with st.spinner("Analyzing document with Gemini..."):
             try:
-                # A. Determine if we should mock based on sidebar selection
-                use_mock = (provider == "Mock")
+                # 1. Prepare the multimodal prompt
+                full_contents = get_generative_parts(uploaded_file, RISK_PROMPT)
                 
-                # B. Call LLM (using your backend function)
-                # Note: We pass mock=use_mock to override the default if selected
-                llm_response_str = call_llm(applicant_text, mode="summary", mock=use_mock)
+                # 2. Call the Gemini API
+                response = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=full_contents
+                )
                 
-                # C. Extract Features
-                features = extract_features(llm_response_str, {})
+                # 3. Display the result
+                st.success("Analysis Complete!")
+                st.markdown(response.text)
                 
-                # D. Load Model & Predict
-                # Ensure these paths exist in your repo structure
-                if os.path.exists("artifacts/model.pkl") and os.path.exists("artifacts/scaler.pkl"):
-                    model = joblib.load("artifacts/model.pkl")
-                    scaler = joblib.load("artifacts/scaler.pkl")
-                    
-                    # Prepare vector [sentiment, risky_count, contra_flag, credibility]
-                    # (Ensure this order matches your training code exactly)
-                    vector = [
-                        features["sentiment_score"],
-                        features["risky_phrase_count"],
-                        features["contradiction_flag"],
-                        features["credibility_score"]
-                    ]
-                    
-                    scaled_vector = scaler.transform([vector])
-                    risk_score = model.predict_proba(scaled_vector)[0][1]
-                    
-                    # E. Display Results
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Risk Score", f"{risk_score:.2%}")
-                        if risk_score > 0.5:
-                            st.error("High Risk Detected")
-                        else:
-                            st.success("Low Risk")
-                            
-                    with col2:
-                        st.json(features)
-                        
-                    with st.expander("View Raw LLM Output"):
-                        st.code(llm_response_str)
-                else:
-                    st.error("Model artifacts not found. Please run training first.")
-                    
             except Exception as e:
-                st.error(f"An error occurred: {e}")
+                st.error(f"An error occurred during the API call: {e}")
+
+# Footer for API Key guidance
+st.sidebar.info(
+    "Set your GEMINI_API_KEY either as an environment variable or in Streamlit Secrets (`.streamlit/secrets.toml`)."
+)
