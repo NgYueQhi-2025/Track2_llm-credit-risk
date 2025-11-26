@@ -132,3 +132,129 @@ def extract_sentiment(
         'average_score': avg_score,
         'raw_results': results
     }
+
+
+# ============================================================================
+# Streamlit App Interface
+# ============================================================================
+# This section runs when the file is executed with `streamlit run backend/app.py`
+
+if __name__ == "__main__" or os.getenv("STREAMLIT_RUNTIME"):
+    # Only import streamlit if we're running as a Streamlit app
+    try:
+        import streamlit as st
+        
+        st.title("🔍 LLM-Based Risk Analysis Demo")
+        st.markdown("""
+        This demo shows how to use the LLM handler to extract risk features from text.
+        
+        **Features:**
+        - Extract risky phrases from applicant text
+        - Perform sentiment analysis
+        - Process text in configurable chunks
+        - Support for mock mode (no API key required)
+        """)
+        
+        # Configuration sidebar
+        st.sidebar.header("⚙️ Configuration")
+        use_mock = st.sidebar.checkbox(
+            "Use Mock Mode", 
+            value=os.environ.get('USE_MOCK_LLM', 'true').lower() == 'true',
+            help="Enable mock mode to test without API key"
+        )
+        chunk_size = st.sidebar.slider(
+            "Chunk Size (words)", 
+            min_value=1, 
+            max_value=50, 
+            value=10,
+            help="Number of words to process in each LLM call"
+        )
+        
+        # Main input area
+        st.header("📝 Input Text")
+        sample_text = """I run a small business with annual revenue of $150,000. 
+        I've had some late payments in the past due to cash flow issues. 
+        Currently seeking a loan to expand operations."""
+        
+        input_text = st.text_area(
+            "Enter text to analyze:",
+            value=sample_text,
+            height=150,
+            help="Enter applicant text or business description"
+        )
+        
+        # Analysis buttons
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🎯 Extract Risky Phrases", type="primary"):
+                with st.spinner("Analyzing text for risk indicators..."):
+                    try:
+                        results = process_uploaded_text(
+                            full_text=input_text,
+                            use_mock=use_mock,
+                            chunk_size=chunk_size,
+                            mode='extract_risky'
+                        )
+                        
+                        st.success("✅ Analysis Complete!")
+                        st.subheader("Results")
+                        st.metric("Risk Count", results['risk_count'])
+                        
+                        if results['risky_phrases']:
+                            st.write("**Detected Risky Phrases:**")
+                            for phrase in results['risky_phrases']:
+                                st.markdown(f"- {phrase}")
+                        else:
+                            st.info("No risky phrases detected")
+                        
+                        with st.expander("📊 View Raw Results"):
+                            st.json(results['raw_results'])
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+                        st.exception(e)
+        
+        with col2:
+            if st.button("😊 Sentiment Analysis"):
+                with st.spinner("Analyzing sentiment..."):
+                    try:
+                        results = extract_sentiment(
+                            full_text=input_text,
+                            use_mock=use_mock,
+                            chunk_size=chunk_size
+                        )
+                        
+                        st.success("✅ Analysis Complete!")
+                        st.subheader("Results")
+                        st.metric("Average Sentiment Score", f"{results['average_score']:.3f}")
+                        
+                        if results['sentiments']:
+                            st.write("**Detected Sentiments:**")
+                            for sent in set(results['sentiments']):
+                                count = results['sentiments'].count(sent)
+                                st.markdown(f"- {sent}: {count} occurrence(s)")
+                        
+                        with st.expander("📊 View Raw Results"):
+                            st.json(results['raw_results'])
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+                        st.exception(e)
+        
+        # Footer
+        st.sidebar.markdown("---")
+        st.sidebar.info("""
+        **Environment Setup:**
+        
+        For real API calls:
+        - Set `GEMINI_API_KEY` in environment
+        - Set `USE_MOCK_LLM=false`
+        
+        For testing:
+        - Leave mock mode enabled
+        """)
+        
+    except ImportError:
+        # Streamlit not available - this is fine when importing as a module
+        pass
