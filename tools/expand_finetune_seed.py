@@ -15,10 +15,12 @@ Output: tools/finetune_seed_gemini.jsonl
 
 import json
 import random
+import os
 from typing import List, Dict
 
-# Set seed for reproducibility
-random.seed(42)
+# Set seed for reproducibility (configurable via environment variable)
+RANDOM_SEED = int(os.getenv('RANDOM_SEED', '42'))
+random.seed(RANDOM_SEED)
 
 
 def generate_negation_examples() -> List[Dict]:

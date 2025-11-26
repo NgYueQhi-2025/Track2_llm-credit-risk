@@ -347,21 +347,28 @@ def _retrieve_relevant_chunks(
         if len(query_embedding.shape) == 2:
             query_embedding = query_embedding[0]  # Get first embedding if batched
         
-        # Compute similarities
-        similarities = []
-        for i, doc_emb in enumerate(doc_embeddings):
-            sim = _cosine_similarity(query_embedding, doc_emb)
-            similarities.append((i, sim))
+        # Compute similarities using vectorized operations for better performance
+        # Normalize embeddings
+        query_norm = np.linalg.norm(query_embedding)
+        if query_norm == 0:
+            logging.warning("Query embedding has zero norm")
+            return []
         
-        # Sort by similarity and get top_k
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        top_indices = similarities[:top_k]
+        doc_norms = np.linalg.norm(doc_embeddings, axis=1)
+        # Avoid division by zero
+        doc_norms = np.where(doc_norms == 0, 1e-10, doc_norms)
+        
+        # Compute cosine similarities using vectorized dot product
+        similarities = np.dot(doc_embeddings, query_embedding) / (doc_norms * query_norm)
+        
+        # Get top_k indices
+        top_indices = np.argsort(similarities)[::-1][:top_k]
         
         # Build result with scores
         results = []
-        for idx, score in top_indices:
+        for idx in top_indices:
             doc = docs[idx].copy()
-            doc['score'] = score
+            doc['score'] = float(similarities[idx])
             results.append(doc)
         
         logging.debug(f"Retrieved {len(results)} chunks with scores: {[r['score'] for r in results]}")

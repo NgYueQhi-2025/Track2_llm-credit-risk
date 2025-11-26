@@ -90,8 +90,10 @@ def _get_local_embedder():
     global _LOCAL_EMBEDDER
     if _LOCAL_EMBEDDER is None and _SENTENCE_TRANSFORMERS_AVAILABLE:
         try:
-            _LOCAL_EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("Loaded local embedder: all-MiniLM-L6-v2")
+            # Allow configuration via environment variable
+            model_name = os.getenv('LOCAL_EMBED_MODEL', 'all-MiniLM-L6-v2')
+            _LOCAL_EMBEDDER = SentenceTransformer(model_name)
+            logger.info(f"Loaded local embedder: {model_name}")
         except Exception as e:
             logger.error(f"Failed to load local embedder: {e}")
             _LOCAL_EMBEDDER = None
