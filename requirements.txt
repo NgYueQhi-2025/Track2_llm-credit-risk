@@ -19,4 +19,4 @@ pytesseract>=0.3.10
 Pillow>=9.0.0
 
 # Specific packages required by the updated code
-google-genai
+google-genai>=0.14.0
