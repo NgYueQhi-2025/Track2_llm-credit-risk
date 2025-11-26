@@ -57,7 +57,6 @@ def analyze_file_with_gemini(
             file_to_upload = io.BytesIO(file_bytes)
             uploaded_gemini_file = client.files.upload(
                 file=file_to_upload,
-                display_name=file_name,
                 mime_type=mime_type
             )
             
