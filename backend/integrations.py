@@ -43,6 +43,15 @@ except Exception:
         # Last resort: raise the original import error for visibility
         raise
 
+# Attempt to import a compatibility adapter that provides a canonical
+# `call_llm(prompt, mode=..., temperature=..., use_cache=..., mock=...)`
+# If available, we'll prefer that to reduce signature mismatches.
+try:
+    from llms.backend import call_llm_compat as llm_compat
+    _CALL_LLM_FUNC = getattr(llm_compat, 'call_llm')
+except Exception:
+    _CALL_LLM_FUNC = None
+
 
 MODEL_PATHS = [
     os.path.join(os.path.dirname(__file__), "artifacts", "model.pkl"),
@@ -137,22 +146,26 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                     return {"parsed": parsed, "features": features}
 
             try:
-                # Call the LLM handler in a backwards-compatible way. Build a
-                # kwargs dict from the function signature so we only pass names
-                # the implementation accepts. If that fails (rare positional-only
-                # implementations), fall back to positional-style attempts.
-                func = llm_handler.call_llm
+                # Call the LLM handler in a backwards-compatible way. Prefer
+                # the compatibility adapter if present; else use the raw
+                # llm_handler.call_llm function.
+                func = _CALL_LLM_FUNC if _CALL_LLM_FUNC is not None else getattr(llm_handler, 'call_llm')
+
+                # Gather handler metadata and signature
+                try:
+                    handler_file = getattr(llm_handler, '__file__', str(llm_handler))
+                except Exception:
+                    handler_file = str(llm_handler)
                 try:
                     sig = inspect.signature(func)
                     params = sig.parameters
                 except Exception:
                     sig = None
                     params = {}
+                print(f"DEBUG: Using llm_handler at {handler_file} with signature: {sig}")
 
-                # Build kwargs only for parameters that actually exist on the function
+                # Build kwargs only for parameters that actually exist on the function.
                 kwargs = {}
-                if 'mode' in params:
-                    kwargs['mode'] = mode
                 if 'temperature' in params:
                     kwargs['temperature'] = 0.0
                 if 'use_cache' in params:
@@ -160,18 +173,37 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
                 if 'mock' in params:
                     kwargs['mock'] = mock
 
+                # Ensure the prompt explicitly states the mode for handlers
+                # that only accept a prompt string.
+                prompt_for_call = f"Mode: {mode}\n" + prompt_base
+
+                raw = None
+                # First attempt: call with kwargs if any
                 try:
-                    raw = func(prompt_base, **kwargs) if kwargs else func(prompt_base)
+                    if kwargs:
+                        # If handler accepts 'mode' as kwarg it will be passed via kwargs
+                        raw = func(prompt_for_call if 'mode' not in params else prompt_base, **kwargs)
+                    else:
+                        raw = func(prompt_for_call)
                 except TypeError:
-                    # Fall back to positional attempts: try common positional orders
+                    # Try prompt-only
                     try:
-                        raw = func(prompt_base, mode, 0.0, True, mock)
+                        raw = func(prompt_for_call)
                     except Exception:
+                        # Try common positional orders as last resorts
+                        tried = False
                         try:
-                            raw = func(prompt_base, mode)
+                            raw = func(prompt_for_call, mode, 0.0, True, mock)
+                            tried = True
                         except Exception:
-                            # Last resort: call with prompt only
-                            raw = func(prompt_base)
+                            pass
+                        if not tried:
+                            try:
+                                raw = func(prompt_for_call, mode)
+                            except Exception:
+                                # Final fallback: call with original prompt_base
+                                raw = func(prompt_base)
+
                 parsed_val = _safe_json_load(raw)
                 parsed[mode] = parsed_val
                 break

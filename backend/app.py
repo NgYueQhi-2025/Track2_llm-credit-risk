@@ -1,61 +1,80 @@
 import time
 from typing import Optional
 import os
+import sys
 import importlib.util
 import pandas as pd
 import streamlit as st
 
-import ui_helpers
+# Ensure backend and project root are on sys.path so imports work when
+# Streamlit runs the script directly (prevents ModuleNotFoundError for
+# `ui_helpers` or `backend.ui_helpers`). This is robust across local
+# and hosted environments.
+_THIS_DIR = os.path.dirname(__file__)
+_PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, os.pardir))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+try:
+    import ui_helpers
+except Exception:
+    # fallback: try package import
+    try:
+        from backend import ui_helpers
+    except Exception:
+        # Last resort: load module from file path
+        spec = importlib.util.spec_from_file_location("ui_helpers", os.path.join(_THIS_DIR, "ui_helpers.py"))
+        ui_helpers = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ui_helpers)
 import integrations
+import shutil
+from pathlib import Path
 
 st.set_page_config(page_title="LLM Credit Risk — Demo", layout="wide")
 
 # --- NEW: WELCOME DIALOG FUNCTION ---
-@st.dialog("👋 Welcome to LLM Credit Risk")
 def show_onboarding_guide():
-    st.markdown("## 💡 Welcome to LLM Credit Risk Assessment")
+    """Render the onboarding content into the current Streamlit container.
+
+    This function is intentionally renderer-agnostic: it can be called inside
+    a `st.modal()` context (preferred) or any container. Buttons update
+    `st.session_state` to control visibility.
+    """
+
+    # Prominent boxed welcome content
     st.markdown(
         """
-        ### **Unlock Deeper Credit Insights from Unstructured Data**
-
-        Tired of credit scoring that only sees numbers? The **LLM Credit Risk Assessment Tool** transforms the way you evaluate applicants by leveraging **Large Language Models (LLMs)** to analyze the nuanced, **unstructured text** found in loan applications, customer messages, or transaction descriptions. Our prototype provides a **transparent and interpretable** risk assessment by combining traditional **financial data** with rich, **behavioral insights** extracted from text.
-        """
-    )
-
-    st.markdown("---")
-    st.markdown("### **🚀 How to Use the App**")
-    st.write("1.  **Upload Data:** Drag and drop your file (CSV, PDF, or image file like PNG/JPG) into the sidebar.")
-    st.write("2.  **Run Analysis:** Click the \"Run Model\" button to initiate the AI and extract key **risk signals** and behavioral patterns.")
-    st.write("3.  **Analyze & Decide:** Review the combined risk score and click on specific applicants to see **clear, human-interpretable explanations** of why they were flagged.")
-
-    st.markdown("---")
-    st.markdown("### **📂 Supported Data Formats**")
-    st.markdown(
-        """
-        To ensure accurate extraction and scoring, your data file must contain the core information needed for both structured and unstructured analysis.
-
-        | Column Name | Requirement | Purpose |
-        | :--- | :--- | :--- |
-        | **id** | Unique numerical identifier | For tracking individual applicants. |
-        | **name** | Applicant's Full Name | For easy identification. |
-        | **income** | Numerical value (e.g., Annual Salary) | Essential structured financial input. |
-        | **text_notes** | The **raw text** for AI analysis (e.g., loan essay, customer messages, or transaction snippets). | The primary input for LLM-driven behavioral risk extraction. |
-        """
-    )
-
-    st.markdown("**Supported File Types for Upload:** CSV, PDF, PNG, and JPG. We will automatically extract the required fields from structured files (CSV) or attempt to parse them from unstructured documents and images (PDF/PNG/JPG).")
-
-    st.markdown("---")
-    col_left, col_mid, col_right = st.columns([1, 1, 1])
-    with col_left:
-        if st.button("Got it — close guide"):
-            st.session_state.seen_welcome = True
-    with col_mid:
-        if st.button("Show again on reload"):
-            st.session_state.seen_welcome = False
-    with col_right:
-        if st.button("Do not show again"):
-            st.session_state.dont_show_welcome = True
+                <style>
+                .welcome-box { padding: 20px; background: #f5fbff; border-radius: 10px; border: 1px solid #d7ecff; margin-bottom: 8px; }
+                .welcome-title { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 8px; }
+                .welcome-sub { font-size: 16px; color: #0f1724; margin-bottom: 12px; }
+                .welcome-list { font-size: 15px; margin-left: 18px; }
+                .welcome-note { font-size: 13px; color: #374151; margin-top: 12px; }
+                .welcome-actions { display: flex; gap: 12px; justify-content: center; margin-top: 14px; }
+                .welcome-actions a {
+                        display: inline-block; padding: 10px 18px; border-radius: 8px; background: #ffffff; color: #0f1724; text-decoration: none; border: 1px solid #e6eefc;
+                        box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+                        font-weight: 600;
+                }
+                .welcome-actions a:hover { background: #f3f8ff; }
+                </style>
+                <div class="welcome-box">
+                    <div class="welcome-title">Welcome to LLM Credit Risk Assessment</div>
+                    <div class="welcome-sub">Unlock deeper credit insights by combining structured financial fields with behavioral signals extracted from free-form text (loan essays, messages, documents).</div>
+                    <div class="welcome-list">
+                        <ol>
+                            <li><strong>Upload Data:</strong> Use the sidebar to add a CSV, PDF, or image.</li>
+                            <li><strong>Run Analysis:</strong> Click <em>Run Model</em> to extract risk signals.</li>
+                            <li><strong>Review:</strong> Click applicants to see clear, human-readable explanations.</li>
+                        </ol>
+                    </div>
+                    <div class="welcome-note"><strong>Supported files:</strong> CSV, PDF, PNG, JPG. For PDFs/images we run OCR when available.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+        )
 
 @st.cache_data
 def load_demo_data(name: str) -> pd.DataFrame:
@@ -80,60 +99,129 @@ def convert_df_to_csv(df):
 
 
 def extract_text_from_file(uploaded_file) -> str:
-    """Mock extractor for PDFs/images. Returns short preview text.
+    """Try to extract text from uploaded files.
 
-    Replace this with real OCR/PDF parsing in production.
+    - For PDFs: use `pdfplumber` when available.
+    - For images: use `pytesseract` + `Pillow` when available.
+    - Fallback: attempt to decode raw bytes or return a short placeholder.
     """
+    name = getattr(uploaded_file, "name", "uploaded_file")
     try:
-        name = getattr(uploaded_file, "name", "uploaded_file")
-        # Try to read text content if possible
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
+    # Try PDF parsing first
+    try:
+        import pdfplumber
+
         try:
             uploaded_file.seek(0)
-            raw = uploaded_file.read()
-            if isinstance(raw, bytes):
-                try:
-                    content = raw.decode("utf-8")
-                except Exception:
-                    content = None
-            else:
-                content = str(raw)
+            with pdfplumber.open(uploaded_file) as pdf:
+                texts = []
+                for page in pdf.pages:
+                    try:
+                        t = page.extract_text() or ""
+                        texts.append(t)
+                    except Exception:
+                        continue
+                content = "\n\n".join([t for t in texts if t])
+                if content:
+                    return (content[:2000] + "...") if len(content) > 2000 else content
         except Exception:
-            content = None
-
-        if content:
-            return (content[:300] + "...") if len(content) > 300 else content
-        return f"[Mock extracted text from {name}]"
+            # If pdfplumber fails on this file, continue to other methods
+            pass
     except Exception:
-        return ""
+        # pdfplumber not installed; skip PDF parsing
+        pass
+
+    # Try image OCR
+    try:
+        from PIL import Image
+        import pytesseract
+
+        # Auto-detect tesseract binary if available (useful on Windows)
+        def _find_tesseract_cmd() -> str | None:
+            # 1) In PATH
+            p = shutil.which("tesseract")
+            if p:
+                return p
+            # 2) Common Windows install locations
+            candidates = [
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            ]
+            for c in candidates:
+                if Path(c).exists():
+                    return c
+            return None
+
+        try:
+            tcmd = _find_tesseract_cmd()
+            if tcmd:
+                pytesseract.pytesseract.tesseract_cmd = tcmd
+
+            uploaded_file.seek(0)
+            img = Image.open(uploaded_file)
+            text = pytesseract.image_to_string(img)
+            if text and text.strip():
+                return (text[:2000] + "...") if len(text) > 2000 else text
+        except Exception:
+            pass
+    except Exception:
+        # OCR deps not installed; skip image OCR
+        pass
+
+    # Fallback: try to decode bytes or return placeholder
+    try:
+        uploaded_file.seek(0)
+        raw = uploaded_file.read()
+        if isinstance(raw, bytes):
+            try:
+                content = raw.decode("utf-8", errors="ignore")
+            except Exception:
+                content = None
+        else:
+            content = str(raw)
+    except Exception:
+        content = None
+
+    if content:
+        return (content[:300] + "...") if len(content) > 300 else content
+    return f"[Extracted text unavailable for {name}]"
 
 def main() -> None:
-    st.title("LLM Credit Risk — Demo UI")
-    
-    # --- NEW: TRIGGER ONBOARDING ---
+    # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
     if "first_visit" not in st.session_state:
         st.session_state["first_visit"] = True
     if "seen_welcome" not in st.session_state:
         st.session_state["seen_welcome"] = False
     if "dont_show_welcome" not in st.session_state:
         st.session_state["dont_show_welcome"] = False
-    
+
     if "model_results" not in st.session_state:
         st.session_state["model_results"] = None
 
-    # Show the dialog only if it's the first visit and not suppressed
+    # If onboarding should show, render it inline at the top (above title)
     if st.session_state["first_visit"] and not st.session_state.get("dont_show_welcome", False) and not st.session_state.get("seen_welcome", False):
         show_onboarding_guide()
+        # Mark that we've shown it once this session so uploads/actions won't re-open it
+        st.session_state['first_visit'] = False
+
+    st.title("LLM Credit Risk — Demo UI")
 
     # Sidebar: upload, demo selector, run
     with st.sidebar:
         st.header("Inputs")
 
         # --- File uploader (bigger visual area) ---
-        # Inject small CSS to make the uploader area more prominent
+        # Use Streamlit's native uploader but style it so the browse button
+        # and drop area appear as a large dashed square.
         st.markdown(
             """
             <style>
-            .uploader-box {
+            /* Target common file-uploader container */
+            div[data-testid="stFileUploader"] > div {
               border: 2px dashed #2C7BE5;
               border-radius: 8px;
               padding: 24px;
@@ -141,20 +229,22 @@ def main() -> None:
               background: rgba(44,123,229,0.03);
               margin-bottom: 8px;
             }
-            .uploader-box h3 { margin: 6px 0 0 0; }
-            .uploader-box p { margin: 6px 0 0 0; color: #6c757d }
-            input[type="file"] { min-height: 140px; }
+            div[data-testid="stFileUploader"] input[type="file"] {
+              width: 100%;
+              height: 140px;
+              opacity: 0.999; /* ensure clickable area */
+              cursor: pointer;
+            }
+            div[data-testid="stFileUploader"] .stButton {
+              margin-top: 8px;
+            }
             </style>
-            <div class="uploader-box">
-              <h3>Click to upload or drag and drop</h3>
-              <p>Supported: CSV, PDF, PNG, JPG (Max 10MB)</p>
-            </div>
             """,
             unsafe_allow_html=True,
         )
 
         uploaded_files = st.file_uploader(
-            "",
+            "Click to upload or drag and drop — Supported: CSV, PDF, PNG, JPG (Max 10MB)",
             type=["csv", "pdf", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
         )
@@ -197,7 +287,18 @@ def main() -> None:
     # Top KPI cards
     k1, k2, k3 = st.columns([1, 1, 1])
     ui_helpers.kpi_card(k1, "Applicants", len(df))
-    ui_helpers.kpi_card(k2, "Avg Income", f"${int(df['income'].mean()):,}" if not df.empty else "—")
+    # Safely compute average income: handle missing or non-numeric values
+    avg_income_display = "—"
+    try:
+        if 'income' in df.columns:
+            incomes = df['income'].astype(float, errors='ignore') if hasattr(df['income'], 'astype') else df['income']
+            incomes = pd.to_numeric(incomes, errors='coerce')
+            if incomes.dropna().size > 0:
+                avg_income_display = f"${int(incomes.mean()):,}"
+    except Exception:
+        avg_income_display = "—"
+
+    ui_helpers.kpi_card(k2, "Avg Income", avg_income_display)
     
     # Calculate High Risk % from saved results if available
     if st.session_state["model_results"] is not None:

@@ -1,0 +1,6 @@
+# Optional OCR and PDF parsing dependencies
+# Note: `pytesseract` requires Tesseract OCR to be installed on the system.
+# On Windows, install Tesseract and ensure its path is in PATH.
+pdfplumber>=0.7.8
+pytesseract>=0.3.10
+Pillow>=9.0.0

@@ -1,3 +1,54 @@
+# LLM Credit Risk — Demo
+
+This repository contains a Streamlit demo that uses an LLM (+ optional OCR) to extract behavioral risk signals from structured CSVs and unstructured uploads (PDF/PNG/JPG).
+
+Quick overview
+- UI entrypoint: `backend/app.py`
+- Optional OCR libs: `pdfplumber`, `pytesseract`, `Pillow` (see `requirements-ocr.txt`)
+- LLM integration: adapters live under `llms/backend/` (use `mock_mode` for offline testing)
+
+How to publish to GitHub and let teammates view the app on Streamlit Community Cloud
+
+1) Push this repo to GitHub (PowerShell commands)
+
+   # create a new repository on GitHub first, then run locally:
+   git init
+   git add .
+   git commit -m "Initial demo: LLM credit risk UI"
+   git branch -M main
+   git remote add origin https://github.com/<YOUR_ORG_OR_USERNAME>/<REPO_NAME>.git
+   git push -u origin main
+
+Replace `<YOUR_ORG_OR_USERNAME>` and `<REPO_NAME>` with your values. If you use SSH, use the SSH remote URL.
+
+2) Connect the repo to Streamlit Community Cloud
+
+- Open https://share.streamlit.io and sign in with GitHub.
+- Click **New app** → choose your GitHub repo, branch `main`, and set `File path` to `backend/app.py`.
+- Click **Deploy**.
+
+Notes for teammates
+- If you rely on OCR, the hosted Streamlit Cloud cannot install system packages (Tesseract) — use the Docker-based deploy or run locally with `requirements-ocr.txt` installed and Tesseract available on the host.
+- If the app uses external LLM API keys, add them under Streamlit app Settings → Secrets (or in GitHub Actions if you add automated deploys).
+
+Local run for testing
+
+PowerShell (from repo root):
+```
+& ".\.venv\Scripts\Activate.ps1"  # if using venv
+pip install -r requirements.txt
+# optional OCR deps
+pip install -r requirements-ocr.txt
+streamlit run backend/app.py
+```
+
+CI / GitHub Actions
+- This repo includes a simple CI that runs on pushes and PRs to `main` and checks Python syntax and installs requirements. See `.github/workflows/ci.yml`.
+
+If you want, I can add an optional workflow to automatically deploy on push using an external action — tell me whether you'd like automatic deployment and whether you will store Streamlit credentials as GitHub secrets.
+
+---
+Project maintainer: edit the repository README and CI to match your org's process.
 # Track 2 — LLM-Based Risk Assessment for AI Credit Scoring
 
 Tagline: Surface behavioral risk signals from application text + tabular data using an LLM + fusion classifier and an interpretable Streamlit dashboard.
