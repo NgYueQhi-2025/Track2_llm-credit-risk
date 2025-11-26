@@ -344,19 +344,59 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
             except Exception as e:
                 last_exc = e
                 # If the error indicates a local LLM server is unreachable (connection refused),
-                # fall back to mock responses so public deployments do not crash.
+                # fall back to a local heuristic driven by the user's text (not the canned mock).
                 msg = str(e).lower()
                 if any(x in msg for x in ("connection refused", "httpconnectionpool", "failed to establish a new connection", "max retries exceeded")):
-                    print(f"WARNING: LLM provider unreachable ({e}); falling back to mock for mode={mode}")
+                    print(f"WARNING: LLM provider unreachable ({e}); using local text-based fallback for mode={mode}")
                     try:
-                        # Attempt a mock call to obtain canned output; ensure we ask for mock explicitly if handler supports it.
-                        if 'mock' in params:
-                            mock_kwargs = {**kwargs, 'mock': True}
-                            raw = func(prompt_for_call if 'mode' in kwargs else prompt_for_call, **mock_kwargs)
+                        # Use the applicant text as the basis for the fallback heuristic
+                        text_for_fallback = df_row.get('text_notes') or df_row.get('text') or ''
+                        # Local heuristic per mode
+                        if mode == 'extract_risky':
+                            import re
+                            rp_list = []
+                            # Patterns tuned to common risky phrases; will only add matches present in text
+                            patterns = [
+                                r'open(ed)?\s+.*new\s+lines?\s+of\s+credit',
+                                r'new\s+lines?\s+of\s+credit',
+                                r'bankrupt',
+                                r'default',
+                                r'late\s+payment(s)?',
+                                r'collection',
+                                r'multiple\s+loans?',
+                                r'overdraft',
+                                r'missed\s+payment(s)?',
+                            ]
+                            for p in patterns:
+                                m = re.search(p, text_for_fallback, flags=re.IGNORECASE)
+                                if m:
+                                    cand = m.group(0)
+                                    if cand not in rp_list:
+                                        rp_list.append(cand)
+                            parsed[mode] = {'risky_phrases': rp_list, 'count': len(rp_list)}
+                        elif mode == 'sentiment':
+                            low = (text_for_fallback or '').lower()
+                            # simple sentiment heuristic fallback
+                            if re.search(r'\b(good|stable|positive|improve|improved|strong)\b', low):
+                                parsed[mode] = {'sentiment': 'positive', 'score': 0.2}
+                            elif re.search(r'\b(bad|negative|risk|problem|concern|poor|unstable|decline)\b', low):
+                                parsed[mode] = {'sentiment': 'negative', 'score': -0.2}
+                            else:
+                                parsed[mode] = {'sentiment': 'neutral', 'score': 0.0}
+                        elif mode == 'detect_contradictions':
+                            # simple contradictions fallback: look for "contradict" keywords
+                            import re
+                            if re.search(r'contradict|inconsist|inconsistent|conflict', text_for_fallback, flags=re.IGNORECASE):
+                                parsed[mode] = {'contradictions': ['detected_in_text'], 'flag': 1}
+                            else:
+                                parsed[mode] = {'contradictions': [], 'flag': 0}
                         else:
-                            raw = func(prompt_for_call)
-                        parsed_val = _safe_json_load(raw)
-                        parsed[mode] = _normalize_llm_raw_output(mode, parsed_val, raw)
+                            parsed[mode] = {}
+                        # Print debug for fallback
+                        try:
+                            print(f"DEBUG fallback parsed[mode] mode={mode} for applicant={applicant_id}: {json.dumps(parsed[mode], ensure_ascii=False)[:800]}")
+                        except Exception:
+                            print(f"DEBUG fallback parsed[mode] (unserializable) mode={mode} for applicant={applicant_id}")
                         break
                     except Exception as e2:
                         last_exc = e2
