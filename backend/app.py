@@ -446,7 +446,7 @@ def main() -> None:
                     feats = ext.get('features', {}) if isinstance(ext.get('features', {}), dict) else {}
                     summary = parsed.get('summary', {}) if isinstance(parsed, dict) else {}
                     summary_text = summary.get('summary') if isinstance(summary, dict) else None
-                except Exception as e:
+                except Exception:
                     # Defensive: if extraction fails for this applicant, use empty fallbacks
                     parsed = {}
                     summary_text = None
@@ -572,7 +572,7 @@ def main() -> None:
                         # Extract features: pass mock_mode to control LLM usage (mock=True uses canned outputs)
                         try:
                             res = integrations.run_feature_extraction(row.to_dict(), mock=mock_mode)
-                        except Exception as e:
+                        except Exception:
                             # Defensive: if extraction fails, use fallback empty features
                             res = {"features": {}, "parsed": {}}
                         features = res.get("features", {})
