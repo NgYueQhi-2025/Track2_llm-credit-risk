@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Smoke test for verifying LLM handler and backend app imports and basic functionality."""
+"""Smoke test for verifying LLM handler and backend app imports and basic functionality.
+
+Note: This test sets USE_MOCK_LLM globally at module level before any imports.
+This is intentional for a standalone smoke test that validates import behavior
+without requiring actual API keys. If integrated into a test suite, consider
+using pytest fixtures or setUp/tearDown methods for environment isolation.
+"""
 
 import sys
 import os
 
-# Set mock mode for testing
+# Set mock mode for testing (before imports to ensure it's picked up)
 os.environ['USE_MOCK_LLM'] = 'true'
 
 def test_llm_handler_import():

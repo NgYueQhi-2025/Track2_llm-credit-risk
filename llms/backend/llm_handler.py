@@ -29,7 +29,7 @@ try:
                 import streamlit as st
                 if hasattr(st, 'secrets') and "GEMINI_API_KEY" in st.secrets:
                     gemini_api_key = st.secrets["GEMINI_API_KEY"]
-            except Exception:
+            except (ImportError, KeyError, AttributeError):
                 pass  # Streamlit not available or secrets not configured
         
         if gemini_api_key:

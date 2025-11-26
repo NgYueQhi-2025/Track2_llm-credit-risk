@@ -20,6 +20,7 @@ Example usage:
 
 from llms.backend.llm_handler import process_text_word_by_word
 import os
+import logging
 from typing import Dict, List, Any
 
 
@@ -119,7 +120,12 @@ def extract_sentiment(
                 scores.append(score)
     
     # Calculate average sentiment score
-    avg_score = sum(scores) / len(scores) if scores else 0.0
+    if scores:
+        avg_score = sum(scores) / len(scores)
+    else:
+        avg_score = 0.0
+        if full_text.strip():  # Only log if there was actual text to process
+            logging.warning("No sentiment scores extracted from text. Check LLM responses.")
     
     return {
         'sentiments': sentiments,
