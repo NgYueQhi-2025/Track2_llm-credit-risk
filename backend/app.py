@@ -77,7 +77,6 @@ def show_onboarding_guide():
                         <p style="margin:6px 0 8px 0;color:#0f1724;line-height:1.5;font-size:14px;">Illustrate how LLMs can improve contextual understanding in credit risk evaluation, increase transparency by exposing model reasoning and textual evidence, and assist lenders in making fairer, more explainable decisions.</p>
                     </div>
 
-                    <p style="margin-top:10px;font-size:13px;color:#374151;"><strong>Privacy note:</strong> This prototype is for demonstration and research. Avoid uploading sensitive personal data unless you control the dataset and environment.</p>
                 </div>
                 """
 
