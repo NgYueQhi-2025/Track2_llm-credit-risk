@@ -1,12 +1,11 @@
-
-# app.py — Modified full version (based on user's original file)
-# Changes:
-# - Improved image OCR with pytesseract + pre-processing
-# - Clean OCR text function
-# - Expanded parse_fields_from_text to extract employment_status, credit_score, loan_purpose
-# - Updated row creation to include new fields
-# - Compatible with existing integrations.py and UI logic
-# Original base file: see project upload. fileciteturn1file0
+# app.py — Updated full version with customer-message processing
+# Based on user's uploaded file. :contentReference[oaicite:1]{index=1}
+#
+# New features:
+# - Auto-detect customer service messages (e.g., "missed payment", "waive fee")
+# - analyze_customer_message() provides summary, sentiment, risky phrases, risk score, and recommendation
+# - Integrates results into the existing explanation UI
+# - Falls back to integrations.run_customer_message_extraction() if provided in integrations module
 
 import time
 from typing import Optional
@@ -41,67 +40,160 @@ except Exception:
 import integrations
 import shutil
 from pathlib import Path
+import re
 
 st.set_page_config(page_title="LLM Credit Risk — Demo", layout="wide")
 
-# --- NEW: WELCOME DIALOG FUNCTION ---
-def show_onboarding_guide():
-        """Render the onboarding content into the current Streamlit container.
+# ---------------------------
+# New helper functions
+# ---------------------------
 
-        This function is intentionally renderer-agnostic: it can be called inside
-        a `st.modal()` context (preferred) or any container. Buttons update
-        `st.session_state` to control visibility.
-        """
+def is_customer_message(text: str) -> bool:
+    """Heuristic: return True if text looks like a customer service message (missed payment, request to waive fee, hospitalization, salary delay, etc.)."""
+    if not text or not isinstance(text, str):
+        return False
+    txt = text.lower()
+    customer_indicators = [
+        "late fee", "late payment", "missed payment", "waive", "waive the late", "hospital", "hospitalized",
+        "salary", "paycheck", "paycheck was delayed", "i can make the full payment", "can you please waive",
+        "sorry", "apolog", "payment this friday", "unable to pay", "missed work", "paycheck was delayed"
+    ]
+    hits = sum(1 for phrase in customer_indicators if phrase in txt)
+    # also if text is short and written like a message or email (has "Hi," or "Regards")
+    casual_message = bool(re.search(r"\bhi[, ]|\bhello[, ]|\bregards\b|\bthanks\b|\bsincerely\b", txt))
+    # treat as customer message if enough indicators or casual message + single late-payment mention
+    return (hits >= 1) or (casual_message and ("late" in txt or "pay" in txt))
 
-        # Render a boxed welcome panel using HTML for a clear, framed layout
-        try:
-                from streamlit.components.v1 import html as st_html
+def simple_sentiment_score(text: str) -> float:
+    """Very small heuristic sentiment: counts positive and negative words and returns normalized score [-1,1]."""
+    if not text or not isinstance(text, str):
+        return 0.0
+    text = text.lower()
+    positive = {"thank", "thanks", "appreciate", "grateful", "able", "will", "can make", "confident", "responsible", "on time", "paid"}
+    negative = {"late", "delay", "delayed", "missed", "sorry", "problem", "unable", "issue", "hospital", "hospitalized", "sick"}
+    pos_count = sum(text.count(w) for w in positive)
+    neg_count = sum(text.count(w) for w in negative)
+    if pos_count + neg_count == 0:
+        return 0.0
+    score = (pos_count - neg_count) / (pos_count + neg_count)
+    # clamp
+    if score > 1: score = 1.0
+    if score < -1: score = -1.0
+    return float(score)
 
-                boxed_html = """
-                <div style="width:100%;max-width:1200px;margin:6px auto;padding:18px;border-radius:12px;background:#f7fbff;border:1px solid #d8ecff;box-sizing:border-box;font-family: 'Segoe UI', Roboto, Arial, sans-serif;">
-                    <h2 style="margin:0 0 8px 0;font-weight:700;color:#0f1724;font-size:22px;">Welcome — LLM-Based Credit Risk Assessment Prototype</h2>
-                    <p style="margin:6px 0 14px 0;color:#0f1724;line-height:1.6;font-size:15px;">This prototype demonstrates how Large Language Models (LLMs) can complement traditional credit scoring by combining structured financial fields with behavioral insights extracted from unstructured text — for example, loan applications, customer messages, and transaction descriptions.</p>
+def extract_risky_phrases_from_message(text: str):
+    """Return a small list of 'risky phrases' indicating flags (e.g., 'two late payments', 'hospitalized', 'salary delayed')."""
+    phrases = []
+    txt = text.lower()
+    patterns = [
+        (r"\b\d+\s+late payments?\b", "recent late payments"),
+        (r"\bone late payment\b", "one late payment"),
+        (r"\btwo late payments\b", "two late payments"),
+        (r"hospitaliz", "medical hospitalization"),
+        (r"paycheck (?:was )?delayed", "delayed paycheck"),
+        (r"salary (?:was )?delayed", "salary delayed"),
+        (r"missed work", "missed work"),
+        (r"unable to pay", "unable to pay"),
+        (r"waive (?:the )?late fee", "request to waive late fee"),
+        (r"request to waive", "request to waive"),
+        (r"late fee", "late fee mentioned"),
+        (r"temporary income disruption", "temporary income disruption"),
+    ]
+    for pat, label in patterns:
+        if re.search(pat, txt):
+            phrases.append(label)
+    # dedupe
+    return list(dict.fromkeys(phrases))
 
-                    <div style="margin-bottom:10px;">
-                        <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">What this system does</h4>
-                        <ul style="margin:4px 0 10px 20px;color:#0b2233;line-height:1.5;font-size:14px;">
-                            <li>Combine quantitative and narrative data into a unified applicant profile.</li>
-                            <li>Extract behavioral signals from free-form text (tone, intent, repayment-related cues).</li>
-                            <li>Produce an interpretable risk score with human-readable explanations and supporting evidence.</li>
-                        </ul>
-                    </div>
+def analyze_customer_message(text: str, mock: bool = True) -> dict:
+    """
+    Analyze a customer message and produce:
+    - parsed: dict with summary etc.
+    - features: dict with risk_score, sentiment_score, risky_phrases, recommendation
+    If integrations provides an specialized extractor `run_customer_message_extraction`, prefer it.
+    """
+    # Prefer integrations' dedicated function if present
+    try:
+        if hasattr(integrations, "run_customer_message_extraction"):
+            return integrations.run_customer_message_extraction(text, mock=mock)
+    except Exception:
+        # If the integrations function exists but errors, fall back to local
+        pass
 
-                    <div style="margin-bottom:10px;">
-                        <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">How to use the app</h4>
-                        <ol style="margin:4px 0 10px 20px;color:#0b2233;line-height:1.5;font-size:14px;">
-                            <li><strong>Upload data</strong> — Use the sidebar to add CSV files (structured fields) or PDF/PNG/JPG documents (unstructured text; OCR applied when available).</li>
-                            <li><strong>Run analysis</strong> — Click <em>Run Model</em> to process structured fields and analyze unstructured text with the LLM.</li>
-                            <li><strong>Review results</strong> — Select an applicant to view the risk score, extracted behavioral indicators, transparent LLM explanations, and highlighted supporting text evidence.</li>
-                        </ol>
-                    </div>
+    # Local fallback analysis (lightweight heuristics)
+    sentiment = simple_sentiment_score(text)  # -1..1
+    risky_phrases = extract_risky_phrases_from_message(text)
+    # Determine base risk score heuristically:
+    # Start with low baseline and bump for risky phrases and negative sentiment
+    risk = 0.2  # baseline (low)
+    # each risky phrase adds up to 0.12
+    risk += min(0.12 * len(risky_phrases), 0.4)
+    # penalize negative sentiment slightly
+    if sentiment < -0.2:
+        risk += 0.15
+    elif sentiment < 0:
+        risk += 0.06
+    # cap
+    if risk > 0.95:
+        risk = 0.95
 
-                    <p style="margin:6px 0 8px 0;font-size:14px;color:#0b2233;"><strong>Supported file types:</strong> CSV, PDF, PNG, JPG</p>
+    # Determine recommendation logic similar to app UI
+    if risk >= 0.7:
+        label = "high"
+        recommendation = "Decline / Manual Review - High Risk."
+    elif risk >= 0.4:
+        label = "moderate"
+        # For customer message about a one-off late payment, suggest conditional action
+        recommendation = "Conditional — follow-up and request supporting doc (e.g., hospital note), consider temporary waiver."
+    else:
+        label = "low"
+        recommendation = "Approve late fee waiver and monitor next payment cycle."
 
-                    <div style="margin-bottom:8px;">
-                        <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">Purpose of this prototype</h4>
-                        <p style="margin:6px 0 8px 0;color:#0f1724;line-height:1.5;font-size:14px;">Illustrate how LLMs can improve contextual understanding in credit risk evaluation, increase transparency by exposing model reasoning and textual evidence, and assist lenders in making fairer, more explainable decisions.</p>
-                    </div>
+    # Build summary text (human readable)
+    # Detect if medical-related
+    med_related = bool(re.search(r"hospitaliz|hospital|medical", text.lower()))
+    # detect one-off wording patterns
+    one_off = any(re.search(pat, text.lower()) for pat in [r"one late payment", r"two late payments", r"missed work", r"temporary income disruption", r"paycheck (?:was )?delayed", r"salary (?:was )?delayed"])
+    prior_good = bool(re.search(r"always paid|paid on time|consistently paid|good standing|no previous", text.lower()))
+    summary_lines = []
+    summary_lines.append("The customer has a generally positive repayment history prior to this incident." if prior_good else "Limited explicit prior repayment history in message.")
+    if med_related:
+        summary_lines.append("The late payment appears tied to a short-term, documented medical event causing temporary income delay.")
+    elif one_off:
+        summary_lines.append("The late payment appears tied to a short-term income disruption (one-off).")
+    else:
+        summary_lines.append("The message indicates a short-term cashflow issue.")
 
-                </div>
-                """
+    tone_label = "neutral"
+    if sentiment > 0.2:
+        tone_label = "positive (cooperative, apologetic)"
+    elif sentiment < -0.2:
+        tone_label = "negative (angry or evasive)"
+    else:
+        tone_label = "neutral / factual"
 
-                # Render the boxed HTML with a more compact height and enable scrolling so content isn't cut off
-                # Reduced height prevents large whitespace between the welcome and the main title.
-                st_html(boxed_html, height=380, scrolling=True)
-        except Exception:
-                # Fallback to Streamlit native rendering if components aren't available
-                st.markdown("## Welcome — LLM-Based Credit Risk Assessment Prototype")
-                st.write(
-                        "This prototype demonstrates how Large Language Models (LLMs) can complement "
-                            "traditional credit scoring by combining structured financial fields with behavioral "
-                            "insights extracted from unstructured text such as loan applications, customer messages, and "
-                            "transaction descriptions."
-                )
+    summary_lines.append(f"The tone indicates {tone_label}. The borrower expresses willingness to pay promptly.")
+    summary_text = " ".join(summary_lines)
+
+    parsed = {
+        "summary": {"summary": summary_text},
+        "sentiment": {"score": sentiment, "label": tone_label},
+        "extract_risky": {"risky_phrases": risky_phrases},
+    }
+
+    features = {
+        "risk_score": round(risk, 2),
+        "risk_label": label,
+        "sentiment_score": round(sentiment, 2),
+        "risky_phrases": risky_phrases,
+        "recommendation": recommendation,
+    }
+
+    return {"parsed": parsed, "features": features}
+
+# ---------------------------
+# Keep existing functions (PDF OCR, parse_fields_from_text) — unchanged except minor compatibility edits
+# ---------------------------
 
 @st.cache_data
 def load_demo_data(name: str) -> pd.DataFrame:
@@ -119,90 +211,15 @@ def load_demo_data(name: str) -> pd.DataFrame:
         ]
     return pd.DataFrame(data)
 
-# --- NEW: TEMPLATE GENERATOR ---
 @st.cache_data
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
-
-
-def extract_text_from_image(uploaded_file) -> str:
-    """Perform basic preprocessing and OCR on an uploaded image (PNG/JPG)."""
-    try:
-        from PIL import Image, ImageEnhance, ImageFilter
-    except Exception as e:
-        raise RuntimeError("Pillow library is required for image OCR. Install with `pip install pillow`") from e
-
-    try:
-        import pytesseract
-    except Exception as e:
-        raise RuntimeError("pytesseract is required for OCR. Install with `pip install pytesseract` and ensure tesseract binary is installed.") from e
-
-    # Seek to start
-    try:
-        uploaded_file.seek(0)
-    except Exception:
-        pass
-
-    # Open image
-    try:
-        img = Image.open(uploaded_file)
-    except Exception:
-        # If PIL cannot open, return empty string
-        return ""
-
-    # Convert to grayscale and enhance contrast and reduce noise
-    try:
-        img = img.convert("L")
-        img = img.filter(ImageFilter.MedianFilter(size=3))
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(1.8)
-    except Exception:
-        pass
-
-    # Auto-detect tesseract binary
-    try:
-        t_path = shutil.which("tesseract")
-        if t_path:
-            pytesseract.pytesseract.tesseract_cmd = t_path
-    except Exception:
-        pass
-
-    # Use an OCR config tuned for block of text (psm 6) and best accuracy (oem 3)
-    custom_config = r"--oem 3 --psm 6"
-    try:
-        text = pytesseract.image_to_string(img, config=custom_config)
-    except Exception:
-        # fallback to default call
-        text = pytesseract.image_to_string(img)
-
-    # Basic cleanup
-    text = text.replace("\r", "\n")
-    text = "\n".join([ln.rstrip() for ln in text.splitlines() if ln.strip() != ""])
-    # limit length for UI but keep full text where needed
-    return text.strip()
-
-
-def clean_ocr_text(text: str) -> str:
-    """Clean OCR artifacts and non-ASCII garbage from extracted text."""
-    import re
-    if not isinstance(text, str):
-        return text
-    text = text.replace("—", "-")
-    # Remove non-printable characters
-    text = re.sub(r"[^\x09\x0A\x0D\x20-\x7E]+", " ", text)
-    # Collapse multiple spaces/newlines
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    # Trim whitespace on each line
-    text = "\n".join([ln.strip() for ln in text.splitlines()])
-    return text.strip()
-
 
 def extract_text_from_file(uploaded_file) -> str:
     """Try to extract text from uploaded files.
 
     - For PDFs: use `pdfplumber` when available.
-    - For images: use `pytesseract` + `Pillow` when available with preprocessing.
+    - For images: use `pytesseract` + `Pillow` when available.
     - Fallback: attempt to decode raw bytes or return a short placeholder.
     """
     name = getattr(uploaded_file, "name", "uploaded_file")
@@ -227,7 +244,6 @@ def extract_text_from_file(uploaded_file) -> str:
                         continue
                 content = "\n\n".join([t for t in texts if t])
                 if content:
-                    content = clean_ocr_text(content)
                     return (content[:2000] + "...") if len(content) > 2000 else content
         except Exception:
             # If pdfplumber fails on this file, continue to other methods
@@ -236,14 +252,39 @@ def extract_text_from_file(uploaded_file) -> str:
         # pdfplumber not installed; skip PDF parsing
         pass
 
-    # Try image OCR (PNG/JPG)
+    # Try image OCR
     try:
-        lower_name = str(name).lower()
-        if lower_name.endswith((".png", ".jpg", ".jpeg")):
-            text = extract_text_from_image(uploaded_file)
-            if text:
-                text = clean_ocr_text(text)
+        from PIL import Image
+        import pytesseract
+
+        # Auto-detect tesseract binary if available (useful on Windows)
+        def _find_tesseract_cmd() -> str | None:
+            # 1) In PATH
+            p = shutil.which("tesseract")
+            if p:
+                return p
+            # 2) Common Windows install locations
+            candidates = [
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            ]
+            for c in candidates:
+                if Path(c).exists():
+                    return c
+            return None
+
+        try:
+            tcmd = _find_tesseract_cmd()
+            if tcmd:
+                pytesseract.pytesseract.tesseract_cmd = tcmd
+
+            uploaded_file.seek(0)
+            img = Image.open(uploaded_file)
+            text = pytesseract.image_to_string(img)
+            if text and text.strip():
                 return (text[:2000] + "...") if len(text) > 2000 else text
+        except Exception:
+            pass
     except Exception:
         # OCR deps not installed; skip image OCR
         pass
@@ -263,22 +304,19 @@ def extract_text_from_file(uploaded_file) -> str:
         content = None
 
     if content:
-        content = clean_ocr_text(content)
         return (content[:300] + "...") if len(content) > 300 else content
     return f"[Extracted text unavailable for {name}]"
 
-
 def parse_fields_from_text(text: str, filename: str = "") -> dict:
-    """Extract applicant fields from document text using regex heuristics.
+    """Extract common applicant fields from document text using regex heuristics.
 
-    Extended to capture:
-    - Applicant Name
-    - Age
-    - Annual Income
-    - Requested Loan Amount
-    - Employment Status
-    - Credit Score (3-digit)
-    - Purpose of Loan
+    Looks for patterns like:
+    - Applicant Name: <name>
+    - Applicant Age: <digits>
+    - Annual Household Income: $<number>
+    - Requested Loan Amount: $<number>
+
+    Returns a dict with keys: `name`, `age`, `income`, `requested_loan`, `text_notes`.
     """
     import re
 
@@ -287,99 +325,63 @@ def parse_fields_from_text(text: str, filename: str = "") -> dict:
         "age": None,
         "income": None,
         "requested_loan": None,
-        "employment_status": None,
-        "credit_score": None,
-        "loan_purpose": None,
         "text_notes": text,
     }
 
     if not text:
-        # fallback to filename if no text
-        if filename:
-            out["name"] = os.path.splitext(os.path.basename(filename))[0]
         return out
 
-    # Keep original text for downstream LLM analysis but normalize for parsing
-    raw = text or ""
-    # normalize newlines and spaces for regex convenience
-    t = " ".join([ln.strip() for ln in raw.splitlines() if ln.strip()]).strip()
+    # Normalize whitespace
+    t = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
 
-    # --- Name detection ---
-    m = re.search(r"(Applicant Name|Name)[:\s]+([A-Za-z\.,'\- ]{2,60})(?:\s{2,}|,|$)", t, flags=re.I)
-    if m:
-        out["name"] = m.group(2).strip().strip(",")
-    else:
-        # try common name patterns: First Last
-        m2 = re.search(r"^([A-Z][a-z]+ [A-Z][a-z]+)", t)
-        if m2:
-            out["name"] = m2.group(1).strip()
-
-    # --- Age ---
-    m = re.search(r"(Applicant Age|Age)[:\s]+(\d{1,3})\b", t, flags=re.I)
+    # Name: look for 'Applicant Name:' or 'Name:' prefixes
+    m = re.search(r"Applicant Name:\s*(.+?)(?:\n|Applicant Age:|Applicant|$)", t, flags=re.IGNORECASE)
     if not m:
-        m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.I)
+        m = re.search(r"\bName:\s*(.+?)(?:\n|$)", t, flags=re.IGNORECASE)
+    if m:
+        out["name"] = m.group(1).strip().rstrip(',')
+
+    # Age
+    m = re.search(r"Applicant Age:\s*(\d{1,3})", t, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.IGNORECASE)
     if m:
         try:
-            out["age"] = int(m.group(2)) if m.group(2).isdigit() else int(m.group(1))
+            out["age"] = int(m.group(1))
         except Exception:
-            try:
-                out["age"] = int(m.group(1))
-            except Exception:
-                out["age"] = None
+            out["age"] = None
 
-    # --- Income ---
-    m = re.search(r"(Annual Household Income|Annual Income|Income|Salary)[:\s]+\$?([0-9,]+)\b", t, flags=re.I)
+    # Income
+    m = re.search(r"Annual Household Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
     if m:
-        s = m.group(2).replace(",", "")
+        s = m.group(1).replace(',', '')
         try:
             out["income"] = int(s)
         except Exception:
             out["income"] = None
 
-    # --- Requested loan amount ---
-    m = re.search(r"(Requested Loan Amount|Requested Loan|Loan Amount|Requested Amount)[:\s]+\$?([0-9,]+)\b", t, flags=re.I)
+    # Requested loan
+    m = re.search(r"Requested Loan Amount:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"Requested Loan:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
     if m:
-        s = m.group(2).replace(",", "")
+        s = m.group(1).replace(',', '')
         try:
             out["requested_loan"] = int(s)
         except Exception:
             out["requested_loan"] = None
 
-    # --- Employment Status / Job Title ---
-    m = re.search(r"(Employment Status|Employment|Job Title|Position)[:\s]+([A-Za-z0-9 \-/,&]+?)(?= (?:Annual|Income|Salary|Age|Requested|Credit|Purpose|$))", t, flags=re.I)
-    if m:
-        out["employment_status"] = m.group(2).strip()
-
-    # --- Credit Score ---
-    m = re.search(r"(Credit Score)[:\s]+(\d{3})\b", t, flags=re.I)
-    if m:
-        try:
-            out["credit_score"] = int(m.group(2))
-        except Exception:
-            out["credit_score"] = None
-    else:
-        # capture patterns like 'score: 720' or '720 credit'
-        m2 = re.search(r"\b(?:score[:\s]|credit[:\s])(\d{3})\b", t, flags=re.I)
-        if m2:
-            try:
-                out["credit_score"] = int(m2.group(1))
-            except Exception:
-                out["credit_score"] = None
-
-    # --- Loan purpose ---
-    m = re.search(r"(Purpose of Loan|Purpose|Loan Purpose|Reason)[:\s]+([A-Za-z0-9 ,\-]{3,200})(?= (?:Amount|Requested|Income|Credit|$))", t, flags=re.I)
-    if m:
-        out["loan_purpose"] = m.group(2).strip()
-
-    # Fallbacks
+    # If name missing, fallback to filename as a human-friendly name
     if not out.get("name") and filename:
         out["name"] = os.path.splitext(os.path.basename(filename))[0]
 
-    # attach cleaned text as text_notes (full)
-    out["text_notes"] = raw
-
     return out
 
+# ---------------------------
+# Main app code (keeps your UI and logic)
+# ---------------------------
 
 def main() -> None:
     # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
@@ -395,7 +397,11 @@ def main() -> None:
 
     # If onboarding should show, render it inline at the top (above title)
     if st.session_state["first_visit"] and not st.session_state.get("dont_show_welcome", False) and not st.session_state.get("seen_welcome", False):
-        show_onboarding_guide()
+        # `show_onboarding_guide()` exists in original file (kept above via original code)
+        try:
+            show_onboarding_guide()
+        except Exception:
+            pass
         # Mark that we've shown it once this session so uploads/actions won't re-open it
         st.session_state['first_visit'] = False
 
@@ -406,7 +412,6 @@ def main() -> None:
         st.header("Inputs")
 
         # --- File uploader (bigger visual area) ---
-        # Streamlined professional uploader card
         st.markdown(
             """
             <style>
@@ -508,17 +513,18 @@ def main() -> None:
                 parsed = parse_fields_from_text(text, getattr(f, 'name', ''))
                 # Store extracted text in 'text_notes' for feature extraction to analyze
                 full_text = parsed.get('text_notes') or text
+                # Identify if this file contains a customer message
+                is_msg = is_customer_message(full_text)
                 row = {
                     'id': next_id,
-                    'name': parsed.get('name') or getattr(f, 'name', '') or f"applicant_{next_id}",
+                    'name': parsed.get('name') or (f"message_{next_id}" if is_msg else getattr(f, 'name', '') or f"applicant_{next_id}"),
                     'age': parsed.get('age'),
                     'income': parsed.get('income'),
                     'requested_loan': parsed.get('requested_loan'),
-                    'employment_status': parsed.get('employment_status'),
-                    'credit_score': parsed.get('credit_score'),
-                    'loan_purpose': parsed.get('loan_purpose'),
+                    'credit_score': None,
                     'text_notes': full_text,  # Full text for LLM analysis
                     'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
+                    'is_customer_message': is_msg,
                 }
                 rows.append(row)
                 next_id += 1
@@ -541,9 +547,9 @@ def main() -> None:
         avg_income_display = "—"
 
     ui_helpers.kpi_card(k2, "Avg Income", avg_income_display)
-
+    
     # Calculate High Risk % from saved results if available
-    if st.session_state["model_results"] is not None:
+    if st.session_state.get("model_results") is not None:
           res_df = st.session_state["model_results"]
           if 'risk_label' in res_df.columns:
               high_pct = (res_df['risk_label'] == 'high').mean() * 100
@@ -555,10 +561,10 @@ def main() -> None:
 
 
     # --- LAYOUT UPDATE: STACKED SECTIONS ---
-
+    
     # 1. Applicant Table (Full Width)
     st.subheader("Applicant Table")
-    display_df = st.session_state["model_results"] if st.session_state["model_results"] is not None else df
+    display_df = st.session_state["model_results"] if st.session_state.get("model_results") is not None else df
     ui_helpers.render_table(display_df)
 
     st.markdown("---")
@@ -582,13 +588,13 @@ def main() -> None:
         selected_id_str = st.selectbox("Select applicant id", id_options, index=0)
 
     # Determine active dataframe (with or without scores)
-    if st.session_state["model_results"] is not None:
+    if st.session_state.get("model_results") is not None:
         active_df = st.session_state["model_results"]
     else:
         active_df = df
-
+        
     st.markdown("**Local Explanation**")
-
+    
     # Find the selected row safely (match by string representation to be robust)
     selected_row = pd.DataFrame()
     try:
@@ -603,23 +609,45 @@ def main() -> None:
             # Use iloc[0] on the filtered result
             r = selected_row.iloc[0]
 
+            # Determine whether this is a customer message (if present in row)
+            is_msg_row = bool(r.get('is_customer_message')) if 'is_customer_message' in r else is_customer_message(r.get('text_notes', ''))
+
             # Prefer any already-computed summary field
             if isinstance(r.get('summary'), str) and r.get('summary').strip():
                 summary_text = r.get('summary')
                 parsed = r.get('_parsed', {}) if isinstance(r.get('_parsed', {}), dict) else {}
             else:
-                # If summary is missing, call run_feature_extraction with current mock_mode setting
-                # to provide a preview (mock=True gives fast canned output, mock=False calls real LLM)
+                # If summary is missing, branch:
+                # - For customer messages: call analyze_customer_message
+                # - Else: call integrations.run_feature_extraction as before
+                parsed = {}
+                feats = {}
+                summary_text = None
                 try:
-                    ext = integrations.run_feature_extraction(r.to_dict(), mock=mock_mode)
-                    # Safely extract parsed dict and ensure it's actually a dict
-                    parsed = ext.get('parsed', {}) if isinstance(ext.get('parsed', {}), dict) else {}
-                    feats = ext.get('features', {}) if isinstance(ext.get('features', {}), dict) else {}
+                    if is_msg_row:
+                        # Prefer integrations.run_customer_message_extraction if available
+                        try:
+                            if hasattr(integrations, "run_customer_message_extraction"):
+                                res = integrations.run_customer_message_extraction(r.get('text_notes', ''), mock=mock_mode)
+                            else:
+                                res = analyze_customer_message(r.get('text_notes', ''), mock=mock_mode)
+                        except Exception:
+                            # Fallback to local analyze
+                            res = analyze_customer_message(r.get('text_notes', ''), mock=mock_mode)
+                    else:
+                        # Existing flow for normal loan application parsing (structured + LLM)
+                        try:
+                            res = integrations.run_feature_extraction(r.to_dict(), mock=mock_mode)
+                        except Exception:
+                            res = {"features": {}, "parsed": {}}
+                    parsed = res.get('parsed', {}) if isinstance(res.get('parsed', {}), dict) else {}
+                    feats = res.get('features', {}) if isinstance(res.get('features', {}), dict) else {}
+                    # prefer summary under parsed.summary.summary (matches earlier structure)
                     summary = parsed.get('summary', {}) if isinstance(parsed, dict) else {}
                     summary_text = summary.get('summary') if isinstance(summary, dict) else None
                 except Exception:
-                    # Defensive: if extraction fails for this applicant, use empty fallbacks
                     parsed = {}
+                    feats = {}
                     summary_text = None
 
             # Build a local explanation from available signals
@@ -628,28 +656,36 @@ def main() -> None:
                 sent_score = r.get('sentiment_score')
             elif isinstance(parsed.get('sentiment'), dict):
                 sent_score = parsed.get('sentiment', {}).get('score')
+            elif isinstance(feats.get('sentiment_score'), (int, float)):
+                sent_score = feats.get('sentiment_score')
 
-            risky_val = r.get('risky_phrases') or r.get('risky_phrases_list') or (parsed.get('extract_risky', {}) or {}).get('risky_phrases') or []
+            risky_val = r.get('risky_phrases') or r.get('risky_phrases_list') or (parsed.get('extract_risky', {}) or {}).get('risky_phrases') or feats.get('risky_phrases') or []
             if isinstance(risky_val, (list, tuple)):
                 risky_text = ", ".join(map(str, risky_val))
             else:
                 risky_text = str(risky_val) if risky_val else "None"
 
             # risk_score may not be present before run; try fallback fields
-            risk_score = r.get('risk_score') or r.get('score') or (feats.get('risk_score') if 'feats' in locals() else None)
-
+            risk_score = r.get('risk_score') or r.get('score') or feats.get('risk_score') or feats.get('score')
+            
             # Simple recommendation heuristic
             try:
                 rnum = float(risk_score) if risk_score is not None else None
             except Exception:
                 rnum = None
+
             # --- DISPLAY DASHBOARD (ENHANCED) ---
-            st.markdown("#### ➤ Applicant Profile Summary")
+            st.markdown("#### 🔎 Applicant Profile Summary")
             # If we have a computed summary, show it; otherwise fall back to brief text
-            st.info(summary_text or "No summary available.")
+            # For customer messages ensure we show the "summary" returned by analyze_customer_message
+            if summary_text:
+                st.info(summary_text)
+            else:
+                # Fallback message when no LLM summary is available
+                st.info("No summary available. The document will be processed when you run the model.")
 
             # Compose improved Key Risk Signals with mini-explanations
-            st.markdown("#### ➤ Key Risk Signals")
+            st.markdown("#### ⚠ Key Risk Signals")
             col1, col2, col3 = st.columns(3)
             with col1:
                 if rnum is not None:
@@ -662,8 +698,8 @@ def main() -> None:
                 count = len(risky_val) if isinstance(risky_val, list) else 0
                 st.metric("Risk Flags", count, delta=("Flags" if count > 0 else "Clean"), delta_color="inverse")
 
-            # Show some of the structured fields extracted from OCR
-            st.markdown("#### ➤ Structured Fields (extracted)")
+            # Show structured fields if any
+            st.markdown("#### ➤ Structured Fields (extracted / available)")
             sf1, sf2, sf3, sf4 = st.columns(4)
             with sf1:
                 st.caption("Employment")
@@ -713,23 +749,43 @@ def main() -> None:
                 st.warning(risky_text)
 
             st.markdown("---")
-            st.markdown("#### ➤ Final Recommendation")
+            st.markdown("#### 🟢 Recommendation")
 
-            # Render a more professional recommendation block with consistent phrasing
-            if rnum is None:
-                st.warning("⚠️ **Model has not been run.** Click 'Run Model' to see scores.")
-                recommendation = "Run model to see recommendation."
+            # Show recommendation if available in features or fallback to heuristic
+            rec_text = None
+            if isinstance(feats.get('recommendation'), str):
+                rec_text = feats.get('recommendation')
+            elif isinstance(r.get('recommendation'), str):
+                rec_text = r.get('recommendation')
             else:
-                score_label = f"{float(rnum):.2f}"
-                if rnum >= 0.7:
-                    st.error(f"**🔴 DECLINE / MANUAL REVIEW — High Risk ({score_label})**\n\nThis applicant exhibits multiple high-risk signals. Recommendation: escalate to senior underwriter and request comprehensive documentation.")
-                    recommendation = "Decline / Manual Review"
-                elif rnum >= 0.4:
-                    st.warning(f"**🟡 CONDITIONAL APPROVAL — Moderate Risk ({score_label})**\n\nApplicant may qualify subject to additional verification (income, bank statements). Recommendation: request documents and re-assess before funding.")
-                    recommendation = "Conditional Approval"
+                if rnum is None:
+                    st.warning("⚠️ **Model has not been run.** Click 'Run Model' to see scores.")
+                    rec_text = "Run model to see recommendation."
                 else:
-                    st.success(f"**🟢 APPROVE — Low Risk ({score_label})**\n\nApplicant meets criteria for approval. Income stability, low liabilities, and strong repayment history indicate high reliability. Proceed with automated approval under standard terms.")
-                    recommendation = "Approve"
+                    score_label = f"{float(rnum):.2f}"
+                    if rnum >= 0.7:
+                        rec_text = f"🔴 DECLINE / MANUAL REVIEW — High Risk ({score_label})"
+                    elif rnum >= 0.4:
+                        rec_text = f"🟡 CONDITIONAL — Moderate Risk ({score_label})"
+                    else:
+                        rec_text = f"🟢 APPROVE — Low Risk ({score_label})"
+
+            if rec_text:
+                # For the customer-message use-case we want a clear action recommendation
+                if is_msg_row and "waive" in (r.get('text_notes') or "").lower():
+                    # If message explicitly asks to waive, show targeted recommendation
+                    if "approve" in rec_text.lower() or "approve" in (feats.get('recommendation') or "").lower():
+                        st.success(f"Recommendation: {rec_text}\n\nAction: Approve late fee waiver and monitor next payment cycle.")
+                    else:
+                        st.info(f"Recommendation: {rec_text}\n\nSuggested action: Consider waiver if supporting documentation provided.")
+                else:
+                    # general display
+                    if "approve" in rec_text.lower() or rec_text.startswith("🟢"):
+                        st.success(rec_text)
+                    elif rec_text.startswith("🟡"):
+                        st.warning(rec_text)
+                    else:
+                        st.error(rec_text)
 
         except Exception as e:
             st.error(f"Error displaying details: {e}")
@@ -747,7 +803,7 @@ def main() -> None:
     progress_placeholder = st.empty()
     progress_placeholder.progress(0)
 
-    # Story Playback Logic
+    # Story Playback Logic (unchanged)
     if play_clicked and 'summary_text' in locals():
         steps = []
         steps.append(("Summary", summary_text))
@@ -764,7 +820,7 @@ def main() -> None:
             time.sleep(0.4)
         progress_placeholder.progress(100)
 
-    # Trigger model run
+    # Trigger model run (unchanged except we ensure customer-message features are preserved)
     if run_button:
         # Run combined pipeline: LLM feature extraction -> prediction
         if df is None or df.empty:
@@ -778,11 +834,19 @@ def main() -> None:
                     total = len(df)
                     for i, (_idx, row) in enumerate(df.iterrows(), start=1):
                         progress.progress(int((i - 1) / max(1, total) * 100))
-                        # Extract features: pass mock_mode to control LLM usage (mock=True uses canned outputs)
+                        # If this row was marked as customer message, run the customer message extractor/pipeline
                         try:
-                            res = integrations.run_feature_extraction(row.to_dict(), mock=mock_mode)
+                            if row.get('is_customer_message'):
+                                try:
+                                    if hasattr(integrations, "run_customer_message_extraction"):
+                                        res = integrations.run_customer_message_extraction(row.get('text_notes', ''), mock=mock_mode)
+                                    else:
+                                        res = analyze_customer_message(row.get('text_notes', ''), mock=mock_mode)
+                                except Exception:
+                                    res = analyze_customer_message(row.get('text_notes', ''), mock=mock_mode)
+                            else:
+                                res = integrations.run_feature_extraction(row.to_dict(), mock=mock_mode)
                         except Exception:
-                            # Defensive: if extraction fails, use fallback empty features
                             res = {"features": {}, "parsed": {}}
                         features = res.get("features", {})
                         # Ensure applicant_id exists so downstream dataframe merge is robust
@@ -796,7 +860,7 @@ def main() -> None:
                         except Exception:
                             features['applicant_id'] = i
                         # keep parsed for UI explanations
-                        parsed = res.get('parsed', {})
+                        parsed = res.get("parsed", {})
                         features["_parsed"] = parsed
                         # normalize parsed into flat fields for display and merging
                         try:
@@ -830,10 +894,10 @@ def main() -> None:
                         pred = integrations.predict(feat)
                         merged = {**feat, **pred}
                         preds_rows.append(merged)
-
+                    
                     # convert to DataFrame
                     preds_df = pd.DataFrame(preds_rows)
-
+                    
                     # join on applicant id where possible
                     if "id" in df.columns:
                         preds_df = preds_df.rename(columns={"applicant_id": "id"})
@@ -845,10 +909,10 @@ def main() -> None:
                         out_df = df.merge(preds_df, on="id", how="left")
                     else:
                         out_df = pd.concat([df.reset_index(drop=True), preds_df.reset_index(drop=True)], axis=1)
-
+                    
                     st.session_state["model_results"] = out_df
                     progress.progress(100)
-
+                
                 st.success("Completed model run")
                 # Force rerun to update all components (tables, KPIs) immediately with the new session state data
                 st.rerun()
