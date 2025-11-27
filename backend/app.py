@@ -1,11 +1,10 @@
 import time
-from typing import Optional, List
+from typing import Optional
 import os
 import sys
 import importlib.util
 import pandas as pd
 import streamlit as st
-import re
 
 # Ensure backend and project root are on sys.path so imports work when
 # Streamlit runs the script directly (prevents ModuleNotFoundError for
@@ -77,6 +76,7 @@ def show_onboarding_guide():
                         <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">Purpose of this prototype</h4>
                         <p style="margin:6px 0 8px 0;color:#0f1724;line-height:1.5;font-size:14px;">Illustrate how LLMs can improve contextual understanding in credit risk evaluation, increase transparency by exposing model reasoning and textual evidence, and assist lenders in making fairer, more explainable decisions.</p>
                     </div>
+
                 </div>
                 """
 
@@ -208,95 +208,77 @@ def extract_text_from_file(uploaded_file) -> str:
     return f"[Extracted text unavailable for {name}]"
 
 
-def _extract_applicant_details(text: str, filename: str = "") -> dict:
-    """Helper function: Extracts fields from a SINGLE applicant's text segment."""
+def parse_fields_from_text(text: str, filename: str = "") -> dict:
+    """Extract common applicant fields from document text using regex heuristics.
+
+    Looks for patterns like:
+    - Applicant Name: <name>
+    - Applicant Age: <digits>
+    - Annual Household Income: $<number>
+    - Requested Loan Amount: $<number>
+
+    Returns a dict with keys: `name`, `age`, `income`, `requested_loan`, `text_notes`.
+    """
+    import re
+
     out = {
         "name": None,
         "age": None,
         "income": None,
         "requested_loan": None,
-        "text_notes": text.strip(),
+        "text_notes": text,
     }
-    
+
     if not text:
         return out
 
     # Normalize whitespace
-    # t = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
-    # Using the raw segment is usually fine for regex, but let's stick to the previous pattern if preferred.
-    # We will just run regex on 'text' directly.
+    t = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
 
     # Name: look for 'Applicant Name:' or 'Name:' prefixes
-    m = re.search(r"Applicant Name:\s*(.+?)(?:\n|Applicant Age:|Applicant|$)", text, flags=re.IGNORECASE)
+    m = re.search(r"Applicant Name:\s*(.+?)(?:\n|Applicant Age:|Applicant|$)", t, flags=re.IGNORECASE)
     if not m:
-        m = re.search(r"\bName:\s*(.+?)(?:\n|$)", text, flags=re.IGNORECASE)
+        m = re.search(r"\bName:\s*(.+?)(?:\n|$)", t, flags=re.IGNORECASE)
     if m:
         out["name"] = m.group(1).strip().rstrip(',')
 
     # Age
-    m = re.search(r"Applicant Age:\s*(\d{1,3})", text, flags=re.IGNORECASE)
+    m = re.search(r"Applicant Age:\s*(\d{1,3})", t, flags=re.IGNORECASE)
     if not m:
-        m = re.search(r"(\d{1,3})\s+years?\s+old", text, flags=re.IGNORECASE)
+        m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.IGNORECASE)
     if m:
-        try: out["age"] = int(m.group(1))
-        except: pass
+        try:
+            out["age"] = int(m.group(1))
+        except Exception:
+            out["age"] = None
 
     # Income
-    m = re.search(r"Annual Household Income:\s*\$?([0-9,]+)", text, flags=re.IGNORECASE)
+    m = re.search(r"Annual Household Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
     if not m:
-        m = re.search(r"Income:\s*\$?([0-9,]+)", text, flags=re.IGNORECASE)
+        m = re.search(r"Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
     if m:
-        try: out["income"] = int(m.group(1).replace(',', ''))
-        except: pass
+        s = m.group(1).replace(',', '')
+        try:
+            out["income"] = int(s)
+        except Exception:
+            out["income"] = None
 
     # Requested loan
-    m = re.search(r"Requested Loan Amount:\s*\$?([0-9,]+)", text, flags=re.IGNORECASE)
+    m = re.search(r"Requested Loan Amount:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
     if not m:
-        m = re.search(r"Requested Loan:\s*\$?([0-9,]+)", text, flags=re.IGNORECASE)
+        m = re.search(r"Requested Loan:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
     if m:
-        try: out["requested_loan"] = int(m.group(1).replace(',', ''))
-        except: pass
+        s = m.group(1).replace(',', '')
+        try:
+            out["requested_loan"] = int(s)
+        except Exception:
+            out["requested_loan"] = None
 
-    # Fallback name if extraction failed
+    # If name missing, fallback to filename as a human-friendly name
     if not out.get("name") and filename:
-        out["name"] = f"Unknown ({filename})"
-        
+        out["name"] = os.path.splitext(os.path.basename(filename))[0]
+
     return out
-
-
-def parse_fields_from_text(text: str, filename: str = "") -> List[dict]:
-    """
-    Splits the full text into segments (one per applicant) and extracts fields.
-    Returns a LIST of dictionaries.
-    """
-    # 1. Split text by common headers found in the PDF.
-    # We use a lookahead (?=...) so the delimiter is kept in the text chunk.
-    # This splits whenever it sees "Personal Information" or "Applicant Name"
-    segments = re.split(r'(?i)(?=\bPersonal Information\b|\bApplicant Name:)', text)
-    
-    results = []
-    for segment in segments:
-        # Skip empty segments or segments that are just whitespace/headers without data
-        if not segment.strip() or len(segment) < 20:
-            continue
-            
-        # Ensure the segment actually looks like an application (has a name or age)
-        # to avoid capturing a table of contents or cover page as a user.
-        if "Name" not in segment and "Age" not in segment:
-            continue
-            
-        # Parse this specific chunk
-        parsed = _extract_applicant_details(segment, filename)
-        
-        # Only add if we successfully grabbed at least a name or some distinct data
-        if parsed['name'] or parsed['age'] or parsed['income']:
-             results.append(parsed)
-             
-    # Fallback: If no splits happened (results is empty), treat the whole text as one applicant
-    if not results and text.strip():
-        results.append(_extract_applicant_details(text, filename))
-        
-    return results
 
 def main() -> None:
     # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
@@ -420,26 +402,21 @@ def main() -> None:
             # If user provided multiple files, give them incremental numeric ids
             for f in uploaded_files:
                 text = extract_text_from_file(f)
-                
-                # Use new parsing logic that returns a list of applicants
-                applicants_found = parse_fields_from_text(text, getattr(f, 'name', ''))
-                
-                for parsed in applicants_found:
-                    # Store extracted text in 'text_notes' for feature extraction to analyze
-                    full_text = parsed.get('text_notes') or text
-                    row = {
-                        'id': next_id,
-                        'name': parsed.get('name') or f"applicant_{next_id}",
-                        'age': parsed.get('age'),
-                        'income': parsed.get('income'),
-                        'requested_loan': parsed.get('requested_loan'),
-                        'credit_score': None,
-                        'text_notes': full_text,  # Full text for LLM analysis
-                        'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
-                    }
-                    rows.append(row)
-                    next_id += 1
-                    
+                parsed = parse_fields_from_text(text, getattr(f, 'name', ''))
+                # Store extracted text in 'text_notes' for feature extraction to analyze
+                full_text = parsed.get('text_notes') or text
+                row = {
+                    'id': next_id,
+                    'name': parsed.get('name') or getattr(f, 'name', '') or f"applicant_{next_id}",
+                    'age': parsed.get('age'),
+                    'income': parsed.get('income'),
+                    'requested_loan': parsed.get('requested_loan'),
+                    'credit_score': None,
+                    'text_notes': full_text,  # Full text for LLM analysis
+                    'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
+                }
+                rows.append(row)
+                next_id += 1
             df = pd.DataFrame(rows)
     else:
         # Demo datasets removed: require user-provided files for analysis.
