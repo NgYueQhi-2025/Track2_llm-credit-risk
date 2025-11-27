@@ -36,45 +36,63 @@ st.set_page_config(page_title="LLM Credit Risk — Demo", layout="wide")
 
 # --- NEW: WELCOME DIALOG FUNCTION ---
 def show_onboarding_guide():
-    """Render the onboarding content into the current Streamlit container.
+        """Render the onboarding content into the current Streamlit container.
 
-    This function is intentionally renderer-agnostic: it can be called inside
-    a `st.modal()` context (preferred) or any container. Buttons update
-    `st.session_state` to control visibility.
-    """
-
-    # Prominent boxed welcome content
-    st.markdown(
+        This function is intentionally renderer-agnostic: it can be called inside
+        a `st.modal()` context (preferred) or any container. Buttons update
+        `st.session_state` to control visibility.
         """
-                <style>
-                .welcome-box { padding: 20px; background: #f5fbff; border-radius: 10px; border: 1px solid #d7ecff; margin-bottom: 8px; }
-                .welcome-title { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 8px; }
-                .welcome-sub { font-size: 16px; color: #0f1724; margin-bottom: 12px; }
-                .welcome-list { font-size: 15px; margin-left: 18px; }
-                .welcome-note { font-size: 13px; color: #374151; margin-top: 12px; }
-                .welcome-actions { display: flex; gap: 12px; justify-content: center; margin-top: 14px; }
-                .welcome-actions a {
-                    display: inline-block; padding: 10px 18px; border-radius: 8px; background: #ffffff; color: #0f1724; text-decoration: none; border: 1px solid #e6eefc;
-                    box-shadow: 0 1px 0 rgba(0,0,0,0.02);
-                    font-weight: 600;
-                }
-                .welcome-actions a:hover { background: #f3f8ff; }
-                </style>
-                <div class="welcome-box">
-                    <div class="welcome-title">Welcome to LLM Credit Risk Assessment</div>
-                    <div class="welcome-sub">Unlock deeper credit insights by combining structured financial fields with behavioral signals extracted from free-form text (loan essays, messages, documents).</div>
-                    <div class="welcome-list">
-                        <ol>
-                            <li><strong>Upload Data:</strong> Use the sidebar to add a CSV, PDF, or image.</li>
-                            <li><strong>Run Analysis:</strong> Click <em>Run Model</em> to extract risk signals.</li>
-                            <li><strong>Review:</strong> Click applicants to see clear, human-readable explanations.</li>
+
+        # Render a boxed welcome panel using HTML for a clear, framed layout
+        try:
+                from streamlit.components.v1 import html as st_html
+
+                boxed_html = """
+                <div style="width:100%;max-width:1200px;margin:6px auto;padding:18px;border-radius:12px;background:#f7fbff;border:1px solid #d8ecff;box-sizing:border-box;font-family: 'Segoe UI', Roboto, Arial, sans-serif;">
+                    <h2 style="margin:0 0 8px 0;font-weight:700;color:#0f1724;font-size:22px;">Welcome — LLM-Based Credit Risk Assessment Prototype</h2>
+                    <p style="margin:6px 0 14px 0;color:#0f1724;line-height:1.6;font-size:15px;">This prototype demonstrates how Large Language Models (LLMs) can complement traditional credit scoring by combining structured financial fields with behavioral insights extracted from unstructured text — for example, loan applications, customer messages, and transaction descriptions.</p>
+
+                    <div style="margin-bottom:10px;">
+                        <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">What this system does</h4>
+                        <ul style="margin:4px 0 10px 20px;color:#0b2233;line-height:1.5;font-size:14px;">
+                            <li>Combine quantitative and narrative data into a unified applicant profile.</li>
+                            <li>Extract behavioral signals from free-form text (tone, intent, repayment-related cues).</li>
+                            <li>Produce an interpretable risk score with human-readable explanations and supporting evidence.</li>
+                        </ul>
+                    </div>
+
+                    <div style="margin-bottom:10px;">
+                        <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">How to use the app</h4>
+                        <ol style="margin:4px 0 10px 20px;color:#0b2233;line-height:1.5;font-size:14px;">
+                            <li><strong>Upload data</strong> — Use the sidebar to add CSV files (structured fields) or PDF/PNG/JPG documents (unstructured text; OCR applied when available).</li>
+                            <li><strong>Run analysis</strong> — Click <em>Run Model</em> to process structured fields and analyze unstructured text with the LLM.</li>
+                            <li><strong>Review results</strong> — Select an applicant to view the risk score, extracted behavioral indicators, transparent LLM explanations, and highlighted supporting text evidence.</li>
                         </ol>
                     </div>
-                    <div class="welcome-note"><strong>Supported files:</strong> CSV, PDF, PNG, JPG. For PDFs/images we run OCR when available.</div>
+
+                    <p style="margin:6px 0 8px 0;font-size:14px;color:#0b2233;"><strong>Supported file types:</strong> CSV, PDF, PNG, JPG</p>
+
+                    <div style="margin-bottom:8px;">
+                        <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">Purpose of this prototype</h4>
+                        <p style="margin:6px 0 8px 0;color:#0f1724;line-height:1.5;font-size:14px;">Illustrate how LLMs can improve contextual understanding in credit risk evaluation, increase transparency by exposing model reasoning and textual evidence, and assist lenders in making fairer, more explainable decisions.</p>
+                    </div>
+
+                    <p style="margin-top:10px;font-size:13px;color:#374151;"><strong>Privacy note:</strong> This prototype is for demonstration and research. Avoid uploading sensitive personal data unless you control the dataset and environment.</p>
                 </div>
-                """,
-        unsafe_allow_html=True,
-    )
+                """
+
+                # Render the boxed HTML with a more compact height and enable scrolling so content isn't cut off
+                # Reduced height prevents large whitespace between the welcome and the main title.
+                st_html(boxed_html, height=380, scrolling=True)
+        except Exception:
+                # Fallback to Streamlit native rendering if components aren't available
+                st.markdown("## Welcome — LLM-Based Credit Risk Assessment Prototype")
+                st.write(
+                        "This prototype demonstrates how Large Language Models (LLMs) can complement "
+                            "traditional credit scoring by combining structured financial fields with behavioral "
+                            "insights extracted from unstructured text such as loan applications, customer messages, and "
+                            "transaction descriptions."
+                )
 
 @st.cache_data
 def load_demo_data(name: str) -> pd.DataFrame:
@@ -288,28 +306,67 @@ def main() -> None:
         st.header("Inputs")
 
         # --- File uploader (bigger visual area) ---
-        # Use Streamlit's native uploader but style it so the browse button
-        # and drop area appear as a large dashed square.
+        # Streamlined professional uploader card
         st.markdown(
             """
             <style>
-            /* Target common file-uploader container */
+            /* Professional uploader card - broader selectors + !important overrides */
+            div[data-testid="stFileUploader"], div[data-testid="stFileUploader"] > div, div[data-testid="stFileUploader"] * {
+                box-sizing: border-box !important;
+                font-family: 'Segoe UI', Roboto, Arial, sans-serif !important;
+            }
+
             div[data-testid="stFileUploader"] > div {
-              border: 2px dashed #2C7BE5;
-              border-radius: 8px;
-              padding: 24px;
-              text-align: center;
-              background: rgba(44,123,229,0.03);
-              margin-bottom: 8px;
+                border: 1px solid #e6eef8 !important;
+                border-radius: 12px !important;
+                padding: 12px 14px !important;
+                text-align: left !important;
+                background: #ffffff !important;
+                box-shadow: 0 6px 18px rgba(15, 23, 36, 0.04) !important;
+                margin-bottom: 12px !important;
             }
-            div[data-testid="stFileUploader"] input[type="file"] {
-              width: 100%;
-              height: 140px;
-              opacity: 0.999; /* ensure clickable area */
-              cursor: pointer;
+
+            /* Title inside uploader */
+            div[data-testid="stFileUploader"] h4, div[data-testid="stFileUploader"] label {
+                margin: 0 0 6px 0 !important;
+                font-size: 14px !important;
+                font-weight: 600 !important;
+                color: #0b2233 !important;
             }
-            div[data-testid="stFileUploader"] .stButton {
-              margin-top: 8px;
+
+            /* Descriptive text */
+            div[data-testid="stFileUploader"] p, div[data-testid="stFileUploader"] .stMarkdown {
+                margin: 0 0 8px 0 !important;
+                color: #4b5563 !important;
+                font-size: 13px !important;
+                line-height: 1.45 !important;
+            }
+
+            /* Make the drop area visually distinct but subtle */
+            div[data-testid="stFileUploader"] input[type="file"], div[data-testid="stFileUploader"] .css-1an6hbn {
+                width: 100% !important;
+                height: 110px !important;
+                opacity: 0.999 !important; /* ensure clickable area */
+                cursor: pointer !important;
+                border-radius: 10px !important;
+                background: transparent !important;
+                border: none !important;
+            }
+
+            /* Tidy the internal button */
+            div[data-testid="stFileUploader"] button, div[data-testid="stFileUploader"] .stButton button {
+                margin-top: 8px !important;
+                background: #ffffff !important;
+                border: 1px solid #e2e8f0 !important;
+                box-shadow: none !important;
+                color: #0b2233 !important;
+            }
+
+            /* Sidebar header polish */
+            section[data-testid="stSidebar"] h2 {
+                font-size: 18px !important;
+                color: #0f1724 !important;
+                margin-bottom: 6px !important;
             }
             </style>
             """,
@@ -317,7 +374,7 @@ def main() -> None:
         )
 
         uploaded_files = st.file_uploader(
-            "Click to upload or drag and drop — Supported: CSV, PDF, PNG, JPG (Max 10MB)",
+            "Click to upload or drag and drop — Supported: CSV, PDF, PNG, JPG",
             type=["csv", "pdf", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
         )
