@@ -1,15 +1,14 @@
 import time
-from typing import Optional
+from typing import Optional, List
 import os
 import sys
 import importlib.util
 import pandas as pd
 import streamlit as st
+import re # Added explicitly at top level for regex operations
 
 # Ensure backend and project root are on sys.path so imports work when
-# Streamlit runs the script directly (prevents ModuleNotFoundError for
-# `ui_helpers` or `backend.ui_helpers`). This is robust across local
-# and hosted environments.
+# Streamlit runs the script directly.
 _THIS_DIR = os.path.dirname(__file__)
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, os.pardir))
 if _PROJECT_ROOT not in sys.path:
@@ -36,21 +35,14 @@ st.set_page_config(page_title="LLM Credit Risk — Demo", layout="wide")
 
 # --- NEW: WELCOME DIALOG FUNCTION ---
 def show_onboarding_guide():
-        """Render the onboarding content into the current Streamlit container.
-
-        This function is intentionally renderer-agnostic: it can be called inside
-        a `st.modal()` context (preferred) or any container. Buttons update
-        `st.session_state` to control visibility.
-        """
-
-        # Render a boxed welcome panel using HTML for a clear, framed layout
+        """Render the onboarding content into the current Streamlit container."""
         try:
                 from streamlit.components.v1 import html as st_html
 
                 boxed_html = """
                 <div style="width:100%;max-width:1200px;margin:6px auto;padding:18px;border-radius:12px;background:#f7fbff;border:1px solid #d8ecff;box-sizing:border-box;font-family: 'Segoe UI', Roboto, Arial, sans-serif;">
                     <h2 style="margin:0 0 8px 0;font-weight:700;color:#0f1724;font-size:22px;">Welcome — LLM-Based Credit Risk Assessment Prototype</h2>
-                    <p style="margin:6px 0 14px 0;color:#0f1724;line-height:1.6;font-size:15px;">This prototype demonstrates how Large Language Models (LLMs) can complement traditional credit scoring by combining structured financial fields with behavioral insights extracted from unstructured text — for example, loan applications, customer messages, and transaction descriptions.</p>
+                    <p style="margin:6px 0 14px 0;color:#0f1724;line-height:1.6;font-size:15px;">This prototype demonstrates how Large Language Models (LLMs) can complement traditional credit scoring by combining structured financial fields with behavioral insights extracted from unstructured text.</p>
 
                     <div style="margin-bottom:10px;">
                         <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">What this system does</h4>
@@ -64,34 +56,17 @@ def show_onboarding_guide():
                     <div style="margin-bottom:10px;">
                         <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">How to use the app</h4>
                         <ol style="margin:4px 0 10px 20px;color:#0b2233;line-height:1.5;font-size:14px;">
-                            <li><strong>Upload data</strong> — Use the sidebar to add CSV files (structured fields) or PDF/PNG/JPG documents (unstructured text; OCR applied when available).</li>
+                            <li><strong>Upload data</strong> — Use the sidebar to add CSV files or PDF/PNG/JPG documents.</li>
                             <li><strong>Run analysis</strong> — Click <em>Run Model</em> to process structured fields and analyze unstructured text with the LLM.</li>
-                            <li><strong>Review results</strong> — Select an applicant to view the risk score, extracted behavioral indicators, transparent LLM explanations, and highlighted supporting text evidence.</li>
+                            <li><strong>Review results</strong> — Select an applicant to view the risk score and extracted behavioral indicators.</li>
                         </ol>
                     </div>
-
-                    <p style="margin:6px 0 8px 0;font-size:14px;color:#0b2233;"><strong>Supported file types:</strong> CSV, PDF, PNG, JPG</p>
-
-                    <div style="margin-bottom:8px;">
-                        <h4 style="margin:6px 0 6px 0;font-size:16px;color:#0b2233;">Purpose of this prototype</h4>
-                        <p style="margin:6px 0 8px 0;color:#0f1724;line-height:1.5;font-size:14px;">Illustrate how LLMs can improve contextual understanding in credit risk evaluation, increase transparency by exposing model reasoning and textual evidence, and assist lenders in making fairer, more explainable decisions.</p>
-                    </div>
-
                 </div>
                 """
-
-                # Render the boxed HTML with a more compact height and enable scrolling so content isn't cut off
-                # Reduced height prevents large whitespace between the welcome and the main title.
                 st_html(boxed_html, height=380, scrolling=True)
         except Exception:
-                # Fallback to Streamlit native rendering if components aren't available
                 st.markdown("## Welcome — LLM-Based Credit Risk Assessment Prototype")
-                st.write(
-                        "This prototype demonstrates how Large Language Models (LLMs) can complement "
-                            "traditional credit scoring by combining structured financial fields with behavioral "
-                            "insights extracted from unstructured text such as loan applications, customer messages, and "
-                            "transaction descriptions."
-                )
+                st.write("This prototype demonstrates how Large Language Models (LLMs) can complement traditional credit scoring.")
 
 @st.cache_data
 def load_demo_data(name: str) -> pd.DataFrame:
@@ -109,19 +84,13 @@ def load_demo_data(name: str) -> pd.DataFrame:
         ]
     return pd.DataFrame(data)
 
-# --- NEW: TEMPLATE GENERATOR ---
 @st.cache_data
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
 
 def extract_text_from_file(uploaded_file) -> str:
-    """Try to extract text from uploaded files.
-
-    - For PDFs: use `pdfplumber` when available.
-    - For images: use `pytesseract` + `Pillow` when available.
-    - Fallback: attempt to decode raw bytes or return a short placeholder.
-    """
+    """Try to extract text from uploaded files (PDF/Images/Text)."""
     name = getattr(uploaded_file, "name", "uploaded_file")
     try:
         uploaded_file.seek(0)
@@ -131,7 +100,6 @@ def extract_text_from_file(uploaded_file) -> str:
     # Try PDF parsing first
     try:
         import pdfplumber
-
         try:
             uploaded_file.seek(0)
             with pdfplumber.open(uploaded_file) as pdf:
@@ -144,12 +112,10 @@ def extract_text_from_file(uploaded_file) -> str:
                         continue
                 content = "\n\n".join([t for t in texts if t])
                 if content:
-                    return (content[:2000] + "...") if len(content) > 2000 else content
+                    return (content[:4000] + "...") if len(content) > 4000 else content
         except Exception:
-            # If pdfplumber fails on this file, continue to other methods
             pass
     except Exception:
-        # pdfplumber not installed; skip PDF parsing
         pass
 
     # Try image OCR
@@ -157,20 +123,15 @@ def extract_text_from_file(uploaded_file) -> str:
         from PIL import Image
         import pytesseract
 
-        # Auto-detect tesseract binary if available (useful on Windows)
         def _find_tesseract_cmd() -> str | None:
-            # 1) In PATH
             p = shutil.which("tesseract")
-            if p:
-                return p
-            # 2) Common Windows install locations
+            if p: return p
             candidates = [
                 r"C:\Program Files\Tesseract-OCR\tesseract.exe",
                 r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
             ]
             for c in candidates:
-                if Path(c).exists():
-                    return c
+                if Path(c).exists(): return c
             return None
 
         try:
@@ -182,14 +143,13 @@ def extract_text_from_file(uploaded_file) -> str:
             img = Image.open(uploaded_file)
             text = pytesseract.image_to_string(img)
             if text and text.strip():
-                return (text[:2000] + "...") if len(text) > 2000 else text
+                return (text[:4000] + "...") if len(text) > 4000 else text
         except Exception:
             pass
     except Exception:
-        # OCR deps not installed; skip image OCR
         pass
 
-    # Fallback: try to decode bytes or return placeholder
+    # Fallback: try to decode bytes
     try:
         uploaded_file.seek(0)
         raw = uploaded_file.read()
@@ -204,10 +164,12 @@ def extract_text_from_file(uploaded_file) -> str:
         content = None
 
     if content:
-        return (content[:300] + "...") if len(content) > 300 else content
+        return (content[:4000] + "...") if len(content) > 4000 else content
     return f"[Extracted text unavailable for {name}]"
 
-def parse_fields_from_text(text: str, filename: str = "") -> list[dict]:
+
+# --- UPDATED PARSING LOGIC ---
+def parse_fields_from_text(text: str, filename: str = "") -> List[dict]:
     """
     Extract common applicant fields from document text using regex heuristics.
     Returns a LIST of dictionaries (one per applicant found in the text).
@@ -219,17 +181,13 @@ def parse_fields_from_text(text: str, filename: str = "") -> list[dict]:
 
     # 1. Split text into segments based on "Applicant Name:" or "Name:"
     # We use a positive lookahead (?=...) to split BUT keep the "Applicant Name" identifier in the chunk
-    # This creates a list where each item is the text for one distinct applicant.
     segments = re.split(r'(?=\b(?:Applicant )?Name:)', text, flags=re.IGNORECASE)
 
     parsed_applicants = []
-    
-    # Counter to help with unique fallbacks if multiple people are in one file
     counter = 1
 
     for segment in segments:
         # Skip empty segments or segments that don't actually contain a name field
-        # (This filters out header text that might appear before the first applicant)
         if not re.search(r'\b(?:Applicant )?Name:', segment, flags=re.IGNORECASE):
             continue
 
@@ -293,23 +251,19 @@ def parse_fields_from_text(text: str, filename: str = "") -> list[dict]:
 
     return parsed_applicants
 
-
 def main() -> None:
-    # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
+    # --- TRIGGER ONBOARDING ---
     if "first_visit" not in st.session_state:
         st.session_state["first_visit"] = True
     if "seen_welcome" not in st.session_state:
         st.session_state["seen_welcome"] = False
     if "dont_show_welcome" not in st.session_state:
         st.session_state["dont_show_welcome"] = False
-
     if "model_results" not in st.session_state:
         st.session_state["model_results"] = None
 
-    # If onboarding should show, render it inline at the top (above title)
     if st.session_state["first_visit"] and not st.session_state.get("dont_show_welcome", False) and not st.session_state.get("seen_welcome", False):
         show_onboarding_guide()
-        # Mark that we've shown it once this session so uploads/actions won't re-open it
         st.session_state['first_visit'] = False
 
     st.title("LLM Credit Risk — Demo UI")
@@ -317,69 +271,15 @@ def main() -> None:
     # Sidebar: upload, demo selector, run
     with st.sidebar:
         st.header("Inputs")
-
-        # --- File uploader (bigger visual area) ---
-        # Streamlined professional uploader card
         st.markdown(
             """
             <style>
-            /* Professional uploader card - broader selectors + !important overrides */
-            div[data-testid="stFileUploader"], div[data-testid="stFileUploader"] > div, div[data-testid="stFileUploader"] * {
-                box-sizing: border-box !important;
-                font-family: 'Segoe UI', Roboto, Arial, sans-serif !important;
-            }
-
             div[data-testid="stFileUploader"] > div {
                 border: 1px solid #e6eef8 !important;
                 border-radius: 12px !important;
                 padding: 12px 14px !important;
-                text-align: left !important;
                 background: #ffffff !important;
                 box-shadow: 0 6px 18px rgba(15, 23, 36, 0.04) !important;
-                margin-bottom: 12px !important;
-            }
-
-            /* Title inside uploader */
-            div[data-testid="stFileUploader"] h4, div[data-testid="stFileUploader"] label {
-                margin: 0 0 6px 0 !important;
-                font-size: 14px !important;
-                font-weight: 600 !important;
-                color: #0b2233 !important;
-            }
-
-            /* Descriptive text */
-            div[data-testid="stFileUploader"] p, div[data-testid="stFileUploader"] .stMarkdown {
-                margin: 0 0 8px 0 !important;
-                color: #4b5563 !important;
-                font-size: 13px !important;
-                line-height: 1.45 !important;
-            }
-
-            /* Make the drop area visually distinct but subtle */
-            div[data-testid="stFileUploader"] input[type="file"], div[data-testid="stFileUploader"] .css-1an6hbn {
-                width: 100% !important;
-                height: 110px !important;
-                opacity: 0.999 !important; /* ensure clickable area */
-                cursor: pointer !important;
-                border-radius: 10px !important;
-                background: transparent !important;
-                border: none !important;
-            }
-
-            /* Tidy the internal button */
-            div[data-testid="stFileUploader"] button, div[data-testid="stFileUploader"] .stButton button {
-                margin-top: 8px !important;
-                background: #ffffff !important;
-                border: 1px solid #e2e8f0 !important;
-                box-shadow: none !important;
-                color: #0b2233 !important;
-            }
-
-            /* Sidebar header polish */
-            section[data-testid="stSidebar"] h2 {
-                font-size: 18px !important;
-                color: #0f1724 !important;
-                margin-bottom: 6px !important;
             }
             </style>
             """,
@@ -400,10 +300,7 @@ def main() -> None:
         run_button = st.button("Run Model", type="primary")
         st.markdown("---")
 
-    # Load data: prefer CSV if provided, otherwise build from uploaded docs or demo
-    # ... inside main() ...
-
-    # Load data: prefer CSV if provided, otherwise build from uploaded docs or demo
+    # --- UPDATED DATA LOADING LOGIC ---
     if 'uploaded_files' in locals() and uploaded_files:
         csvs = [f for f in uploaded_files if str(f.name).lower().endswith('.csv')]
         if csvs:
@@ -416,15 +313,15 @@ def main() -> None:
         else:
             rows = []
             next_id = 1
-            
+            # Iterate through every uploaded file
             for f in uploaded_files:
-                # 1. Extract all text from the file (e.g., all 3 pages)
+                # 1. Extract ALL text from the file (pages 1-3)
                 text = extract_text_from_file(f)
                 
-                # 2. Parse text into a LIST of applicants (new logic)
+                # 2. Parse text into a LIST of applicants
                 applicants_found = parse_fields_from_text(text, getattr(f, 'name', ''))
                 
-                # 3. Iterate through every applicant found in this single file
+                # 3. Loop through EACH applicant found in the single file
                 for applicant in applicants_found:
                     full_text = applicant.get('text_notes')
                     
@@ -440,17 +337,14 @@ def main() -> None:
                     }
                     rows.append(row)
                     next_id += 1
-                    
             df = pd.DataFrame(rows)
     else:
-        # Demo datasets removed: require user-provided files for analysis.
         df = pd.DataFrame()
-        st.info("Please upload applicant documents or a CSV to analyze. Demo datasets have been removed; upload your own files.")
+        st.info("Please upload applicant documents or a CSV to analyze.")
 
     # Top KPI cards
     k1, k2, k3 = st.columns([1, 1, 1])
     ui_helpers.kpi_card(k1, "Applicants", len(df))
-    # Safely compute average income: handle missing or non-numeric values
     avg_income_display = "—"
     try:
         if 'income' in df.columns:
@@ -460,10 +354,8 @@ def main() -> None:
                 avg_income_display = f"${int(incomes.mean()):,}"
     except Exception:
         avg_income_display = "—"
-
     ui_helpers.kpi_card(k2, "Avg Income", avg_income_display)
     
-    # Calculate High Risk % from saved results if available
     if st.session_state["model_results"] is not None:
           res_df = st.session_state["model_results"]
           if 'risk_label' in res_df.columns:
@@ -474,9 +366,6 @@ def main() -> None:
     else:
         ui_helpers.kpi_card(k3, "High Risk (%)", "—")
 
-
-    # --- LAYOUT UPDATE: STACKED SECTIONS ---
-    
     # 1. Applicant Table (Full Width)
     st.subheader("Applicant Table")
     display_df = st.session_state["model_results"] if st.session_state["model_results"] is not None else df
@@ -487,11 +376,8 @@ def main() -> None:
     # 2. Explanations (Full Width below Table)
     st.subheader("Explanations & Story")
 
-    # Put the ID selector in a smaller column so it doesn't stretch
     col_sel, col_space = st.columns([1, 3])
     with col_sel:
-        # Use a selectbox that lists available applicant ids as strings to avoid
-        # numeric casting issues when IDs are non-integer (uploaded CSVs).
         id_options = []
         try:
             if not df.empty and 'id' in df.columns:
@@ -502,7 +388,6 @@ def main() -> None:
             id_options = ["0"]
         selected_id_str = st.selectbox("Select applicant id", id_options, index=0)
 
-    # Determine active dataframe (with or without scores)
     if st.session_state["model_results"] is not None:
         active_df = st.session_state["model_results"]
     else:
@@ -510,40 +395,31 @@ def main() -> None:
         
     st.markdown("**Local Explanation**")
     
-    # Find the selected row safely (match by string representation to be robust)
     selected_row = pd.DataFrame()
     try:
         if not active_df.empty and 'id' in active_df.columns:
-            # match on stringified id values to avoid int/str mismatches
             selected_row = active_df[active_df['id'].astype(str) == str(selected_id_str)]
     except Exception:
         selected_row = pd.DataFrame()
 
     if not selected_row.empty:
         try:
-            # Use iloc[0] on the filtered result
             r = selected_row.iloc[0]
             
-            # Prefer any already-computed summary field
             if isinstance(r.get('summary'), str) and r.get('summary').strip():
                 summary_text = r.get('summary')
                 parsed = r.get('_parsed', {}) if isinstance(r.get('_parsed', {}), dict) else {}
             else:
-                # If summary is missing, call run_feature_extraction with current mock_mode setting
-                # to provide a preview (mock=True gives fast canned output, mock=False calls real LLM)
                 try:
                     ext = integrations.run_feature_extraction(r.to_dict(), mock=mock_mode)
-                    # Safely extract parsed dict and ensure it's actually a dict
                     parsed = ext.get('parsed', {}) if isinstance(ext.get('parsed', {}), dict) else {}
                     feats = ext.get('features', {}) if isinstance(ext.get('features', {}), dict) else {}
                     summary = parsed.get('summary', {}) if isinstance(parsed, dict) else {}
                     summary_text = summary.get('summary') if isinstance(summary, dict) else None
                 except Exception:
-                    # Defensive: if extraction fails for this applicant, use empty fallbacks
                     parsed = {}
                     summary_text = None
 
-            # Build a local explanation from available signals
             sent_score = None
             if 'sentiment_score' in r:
                 sent_score = r.get('sentiment_score')
@@ -556,20 +432,16 @@ def main() -> None:
             else:
                 risky_text = str(risky_val) if risky_val else "None"
 
-            # risk_score may not be present before run; try fallback fields
             risk_score = r.get('risk_score') or r.get('score') or (feats.get('risk_score') if 'feats' in locals() else None)
             
-            # Simple recommendation heuristic
             try:
                 rnum = float(risk_score) if risk_score is not None else None
             except Exception:
                 rnum = None
-            # --- DISPLAY DASHBOARD (ENHANCED) ---
+
             st.markdown("#### ➤ Applicant Profile Summary")
-            # If we have a computed summary, show it; otherwise fall back to brief text
             st.info(summary_text or "No summary available.")
 
-            # Compose improved Key Risk Signals with mini-explanations
             st.markdown("#### ➤ Key Risk Signals")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -583,33 +455,12 @@ def main() -> None:
                 count = len(risky_val) if isinstance(risky_val, list) else 0
                 st.metric("Risk Flags", count, delta=("Flags" if count > 0 else "Clean"), delta_color="inverse")
 
-            # Mini explanations block (transparent interpretability)
-            st.markdown("**Explanations**")
-            # Risk score explanation
+            # Mini explanations
             try:
-                risk_expl = "The model estimated a relative risk score based on detected behavioral signals, sentiment, and structured financial hints."
+                risk_expl = "The model estimated a relative risk score based on detected behavioral signals."
                 if rnum is not None:
                     risk_expl = f"📌 Risk Score Explanation: The model estimated a {float(rnum):.2f} relative risk based on stable income, liabilities, and repayment history."
                 st.caption(risk_expl)
-            except Exception:
-                pass
-
-            # Sentiment explanation
-            try:
-                sent_expl = "📌 Sentiment Explanation: Narrative sentiment indicates borrower tone and repayment intent."
-                if sent_score is not None:
-                    sent_expl = f"📌 Sentiment Explanation: Sentiment is {float(sent_score):+.2f}, indicating {'positive' if sent_score>0 else 'neutral' if sent_score==0 else 'negative'} tone and repayment intent."
-                st.caption(sent_expl)
-            except Exception:
-                pass
-
-            # Risk flags explanation
-            try:
-                if count == 0:
-                    flags_expl = "📌 Risk Flags Explanation: No behavioural red flags detected."
-                else:
-                    flags_expl = f"📌 Risk Flags Explanation: Detected {count} flagged behaviour(s) — {risky_text}."
-                st.caption(flags_expl)
             except Exception:
                 pass
 
@@ -620,20 +471,19 @@ def main() -> None:
             st.markdown("---")
             st.markdown("#### ➤ Final Recommendation")
 
-            # Render a more professional recommendation block with consistent phrasing
             if rnum is None:
                 st.warning("⚠️ **Model has not been run.** Click 'Run Model' to see scores.")
                 recommendation = "Run model to see recommendation."
             else:
                 score_label = f"{float(rnum):.2f}"
                 if rnum >= 0.7:
-                    st.error(f"**🔴 DECLINE / MANUAL REVIEW — High Risk ({score_label})**\n\nThis applicant exhibits multiple high-risk signals. Recommendation: escalate to senior underwriter and request comprehensive documentation.")
+                    st.error(f"**🔴 DECLINE / MANUAL REVIEW — High Risk ({score_label})**\n\nThis applicant exhibits multiple high-risk signals.")
                     recommendation = "Decline / Manual Review"
                 elif rnum >= 0.4:
-                    st.warning(f"**🟡 CONDITIONAL APPROVAL — Moderate Risk ({score_label})**\n\nApplicant may qualify subject to additional verification (income, bank statements). Recommendation: request documents and re-assess before funding.")
+                    st.warning(f"**🟡 CONDITIONAL APPROVAL — Moderate Risk ({score_label})**\n\nApplicant may qualify subject to additional verification.")
                     recommendation = "Conditional Approval"
                 else:
-                    st.success(f"**🟢 APPROVE — Low Risk ({score_label})**\n\nApplicant meets criteria for approval. Income stability, low liabilities, and strong repayment history indicate high reliability. Proceed with automated approval under standard terms.")
+                    st.success(f"**🟢 APPROVE — Low Risk ({score_label})**\n\nApplicant meets criteria for approval.")
                     recommendation = "Approve"
 
         except Exception as e:
@@ -646,13 +496,10 @@ def main() -> None:
     st.markdown("---")
     st.markdown("**Story Playback**")
     pcol1, pcol2, pcol3 = st.columns([1, 1, 2])
-    prev_clicked = pcol1.button("◀ Prev")
     play_clicked = pcol2.button("Play")
-    # placeholder progress widget for playback actions
     progress_placeholder = st.empty()
     progress_placeholder.progress(0)
 
-    # Story Playback Logic
     if play_clicked and 'summary_text' in locals():
         steps = []
         steps.append(("Summary", summary_text))
@@ -663,7 +510,6 @@ def main() -> None:
 
         for i, (title, body) in enumerate(steps, start=1):
             st.markdown(f"**Step {i}: {title}**")
-            # Simple highlight
             st.info(body)
             progress_placeholder.progress(int(i / len(steps) * 100))
             time.sleep(0.4)
@@ -671,7 +517,6 @@ def main() -> None:
 
     # Trigger model run
     if run_button:
-        # Run combined pipeline: LLM feature extraction -> prediction
         if df is None or df.empty:
             st.error("No applicants to score. Upload a CSV or choose a demo dataset.")
         else:
@@ -683,34 +528,26 @@ def main() -> None:
                     total = len(df)
                     for i, (_idx, row) in enumerate(df.iterrows(), start=1):
                         progress.progress(int((i - 1) / max(1, total) * 100))
-                        # Extract features: pass mock_mode to control LLM usage (mock=True uses canned outputs)
                         try:
                             res = integrations.run_feature_extraction(row.to_dict(), mock=mock_mode)
                         except Exception:
-                            # Defensive: if extraction fails, use fallback empty features
                             res = {"features": {}, "parsed": {}}
                         features = res.get("features", {})
-                        # Ensure applicant_id exists so downstream dataframe merge is robust
                         try:
                             if 'applicant_id' not in features:
-                                # prefer explicit 'id' from the source row
                                 if 'id' in row:
                                     features['applicant_id'] = row.get('id')
                                 else:
                                     features['applicant_id'] = i
                         except Exception:
                             features['applicant_id'] = i
-                        # keep parsed for UI explanations
                         parsed = res.get("parsed", {})
                         features["_parsed"] = parsed
-                        # normalize parsed into flat fields for display and merging
                         try:
                             norm = integrations.expand_parsed_to_fields(parsed)
                         except Exception:
                             norm = {}
-                        # copy normalized known fields into features (do not overwrite existing numeric features)
                         for k, v in norm.items():
-                            # use a slightly different key for phrases list
                             if k == 'risky_phrases':
                                 features['risky_phrases_list'] = v
                             else:
@@ -720,20 +557,16 @@ def main() -> None:
                         rows.append(row.to_dict())
                     progress.progress(90)
 
-                    # Predict for each extracted feature set
                     preds_rows = []
                     for i, feat in enumerate(features_list, start=1):
                         pred = integrations.predict(feat)
                         merged = {**feat, **pred}
                         preds_rows.append(merged)
                     
-                    # convert to DataFrame
                     preds_df = pd.DataFrame(preds_rows)
                     
-                    # join on applicant id where possible
                     if "id" in df.columns:
                         preds_df = preds_df.rename(columns={"applicant_id": "id"})
-                        # try to align types so merge works (e.g. int vs str)
                         try:
                             preds_df["id"] = preds_df["id"].astype(df["id"].dtype)
                         except Exception:
@@ -746,7 +579,6 @@ def main() -> None:
                     progress.progress(100)
                 
                 st.success("Completed model run")
-                # Force rerun to update all components (tables, KPIs) immediately with the new session state data
                 st.rerun()
 
             except Exception as e:
