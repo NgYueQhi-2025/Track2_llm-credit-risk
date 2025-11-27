@@ -1,5 +1,12 @@
 # LLM-Based Credit Risk Assessment (Track 2)
 ### THE ROOKIES
+## 🔗 Quick Links
+| Live Demo | Video Walkthrough | Pitch Deck |
+| :---: | :---: | :---: |
+| [**Launch Web App**](https://track2llm-credit-risk-9qhysbrs3gyvv34fxxvb2p.streamlit.app/) | [**Watch Demo**](https://drive.google.com/file/d/1wo5ZICngzGATV0njh2VrcXVVRxXCg6tV/view?usp=drivesdk) | [**View Slides**](https://www.canva.com/design/DAG54l7iTaU/WikI93oh_rpgqiTGHTlxPA/edit?utm_content=DAG54l7iTaU&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton) |
+
+
+---
 
 ## ⭐ Overview
 
@@ -11,12 +18,10 @@ The app demonstrates how modern credit scoring can be improved using **Large Lan
 
 # 1. Industry Context
 
-Traditional credit scoring models rely heavily on:
-
-- Income  
-- Credit score  
-- Liabilities  
-- Payment history  
+Traditional credit scoring models are often "blind" to context. They rely heavily on:
+**Strict Numerics:** Income, FICO score, and liability counts.
+**Missing Context:** They ignore explanations for late payments or behavioral cues in application letters.
+**Black Box Logic:** Decisions are often hard to explain to the applicant 
 
 But in real-world lending, **unstructured text** such as loan applications, explanations for late payments, or emails contains deeper behavioural cues:
 
@@ -170,7 +175,21 @@ Includes:
 
 ---
 
-# 6. Architecture Diagram
+## 6. Tech Stack
+
+| Layer             | Technology / Libraries                 | Purpose |
+|------------------|----------------------------------------|---------|
+| **Frontend**     | Streamlit, Altair                      | UI, interactive dashboard, charts & data visualization |
+| **LLM Engine**   | google-genai                           | Behavioural analysis, feature extraction, LLM scoring |
+| **Parsing**      | pdfplumber, pypdf, easyocr, pytesseract, Pillow | OCR, PDF parsing, and raw text extraction |
+| **Data Handling**| pandas                                 | Data loading, cleaning, processing |
+| **ML Core**      | scikit-learn, joblib                   | ML model training, scoring, and artifact saving |
+| **Backend**      | Python 3.10+                           | Core logic & application pipeline |
+| **Caching**      | JSON / Local Artifacts                 | Deterministic runs & API cost reduction |
+ 
+---
+
+# 7. Architecture Diagram
 
 ```
 User Uploads File(s)
@@ -190,7 +209,7 @@ Interactive Dashboard (Streamlit)
 
 ---
 
-# 7. How To Use
+# 8. How To Use
 
 ## Step 1 — Install Requirements
 ```
@@ -216,7 +235,7 @@ View:
 
 ---
 
-# 8. Folder Structure
+# 9. Folder Structure
 
 ```
 backend/app.py                 # Main Streamlit application
@@ -228,7 +247,7 @@ data/
 
 ---
 
-# 9. Deployment
+# 10. Deployment
 
 This app can be deployed on:
 
@@ -244,7 +263,7 @@ Deployment Steps:
 
 ---
 
-# 10. Judging Criteria Alignment
+# 11. Judging Criteria Alignment
 
 ### ✔ Improved Credit Decision-Making
 Uses behavioural + numeric indicators.
@@ -260,12 +279,12 @@ Complete pipeline from upload → extraction → scoring → dashboard.
 
 ---
 
-# 11. Team Members
-* Member A (Backend Lead): Repo setup, Architecture.
-* Member B (UI/UX Lead): Streamlit layout, Visuals.
-* Member C (Integrator): Wiring Backend to UI, Error handling.
-* Member D (AI/LLM): Prompts, Feature Engineering, Model Training.
-* Member E (Testing/Demo): QA, Fairness checks, Demo recording.
+# 12. Team Members
+* Esther Kong Yuan Er(UI Lead): Streamlit layout, Visuals.
+* Lim Hui Yun (Integrator): Wiring Backend to UI, Error handling.
+* Lim Xuan Ning (AI/LLM): Prompts, Feature Engineering, Model Training.
+* Ee Mei Xuan (Testing/Demo): QA, Fairness checks, Demo recording.
+* Ng Yue Qhi (Backend Lead): Repo setup, Architecture.
 
 ---
 
