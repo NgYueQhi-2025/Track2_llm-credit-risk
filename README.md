@@ -238,11 +238,16 @@ View:
 # 9. Folder Structure
 
 ```
-backend/app.py                 # Main Streamlit application
-backend/integrations.py        # LLM + heuristic feature extraction + scoring
-backend/ui_helpers.py          # KPI cards, tables, helpers
+backend/app.py                     # Main Streamlit application
+backend/integrations.py            # LLM + heuristic feature extraction + scoring
+backend/ui_helpers.py              # KPI cards, tables, helpers
 requirements.txt
-data/
+data/                              # JUDGES: May use the sample CSVs/PDFs here to test the app
+├── demo.csv                       # Structured data for batch testing
+└── testing1.pdf                   # Unstructured document for single file OCR testing
+└── testing2.pdf                   # Unstructured document for single file OCR testing
+└── Combined_loan_applications.pdf # Unstructured document for batch file OCR testing
+└── Combined_customer_message.pdf  # Unstructured document for batch file OCR testing
 ```
 
 ---
