@@ -430,7 +430,6 @@ def main() -> None:
     else:
         # Demo datasets removed: require user-provided files for analysis.
         df = pd.DataFrame()
-        st.info("Please upload applicant documents or a CSV to analyze. Demo datasets have been removed; upload your own files.")
 
     # Small UI note: show detected applicant / file counts immediately after upload
     try:
