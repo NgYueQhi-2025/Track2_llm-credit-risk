@@ -1,5 +1,5 @@
 # LLM-Based Credit Risk Assessment (Track 2)
-### THE ROOKIES
+### TEAM: THE ROOKIES
 ## 🔗 Quick Links
 | Live Demo | Video Walkthrough | Pitch Deck |
 | :---: | :---: | :---: |
