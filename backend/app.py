@@ -326,11 +326,9 @@ def main() -> None:
         st.subheader("Applicant scope")
         applicant_scope = st.selectbox("Who are you uploading?", ["Individuals", "Businesses"], index=0)
 
-        demo = st.selectbox("Or choose a demo dataset", ["Demo A", "Demo B"])      
-        mock_mode = st.checkbox("Mock mode (no LLM/API)", value=True)
+        mock_mode = False
         run_button = st.button("Run Model", type="primary")
         st.markdown("---")
-        st.caption("Tip: use the demo dataset for fastest demo flow.")
 
     # Load data: prefer CSV if provided, otherwise build from uploaded docs or demo
     if 'uploaded_files' in locals() and uploaded_files:
@@ -365,7 +363,9 @@ def main() -> None:
                 next_id += 1
             df = pd.DataFrame(rows)
     else:
-        df = load_demo_data(demo)
+        # Demo datasets removed: require user-provided files for analysis.
+        df = pd.DataFrame()
+        st.info("Please upload applicant documents or a CSV to analyze. Demo datasets have been removed; upload your own files.")
 
     # Top KPI cards
     k1, k2, k3 = st.columns([1, 1, 1])

@@ -525,8 +525,23 @@ def run_feature_extraction(df_row: Dict[str, Any], mock: bool = True, max_retrie
             except Exception as e:
                 last_exc = e
                 msg = str(e).lower()
-                if any(x in msg for x in ("connection refused", "httpconnectionpool", "failed to establish a new connection", "max retries exceeded")):
-                    print(f"WARNING: LLM provider unreachable ({e}); using local text-based fallback for mode={mode}")
+                # Treat several common provider-unavailable errors as 'unreachable'
+                # so we fall back to the local text-based extractor instead of
+                # retrying blindly. This covers cases like missing provider
+                # libraries ("no llm provider available") as well as network
+                # connection failures.
+                unreachable_signals = (
+                    "connection refused",
+                    "httpconnectionpool",
+                    "failed to establish a new connection",
+                    "max retries exceeded",
+                    "no llm provider",
+                    "provider not available",
+                    "not implemented",
+                    "not available",
+                )
+                if any(x in msg for x in unreachable_signals):
+                    print(f"WARNING: LLM provider unreachable or unavailable ({e}); using local text-based fallback for mode={mode}")
                     try:
                         text_for_fallback = df_row.get('text_notes') or df_row.get('text') or ''
                         import re
