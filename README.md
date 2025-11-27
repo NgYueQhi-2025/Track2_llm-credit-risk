@@ -1,5 +1,5 @@
 # LLM-Based Credit Risk Assessment (Track 2)
-###THE ROOKIES
+### THE ROOKIES
 
 ## ⭐ Overview
 
