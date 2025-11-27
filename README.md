@@ -1,290 +1,276 @@
-# LLM Credit Risk — Demo
+# LLM-Based Credit Risk Assessment (Track 2)
+###THE ROOKIES
 
-This repository contains a Streamlit demo that uses an LLM (+ optional OCR) to extract behavioral risk signals from structured CSVs and unstructured uploads (PDF/PNG/JPG).
+## ⭐ Overview
 
-Quick overview
-- UI entrypoint: `backend/app.py`
-- Optional OCR libs: `pdfplumber`, `pytesseract`, `Pillow` (see `requirements-ocr.txt`)
-- LLM integration: adapters live under `llms/backend/` (use `mock_mode` for offline testing)
+This repository contains a complete end-to-end prototype for **LLM-based credit risk assessment**, combining structured applicant data with unstructured text extracted from PDFs, images and CSVs. The system integrates OCR, regex-based parsing, LLM-powered behavioural analysis, rule-based overrides and transparent explainability through a Streamlit dashboard.
 
-How to publish to GitHub and let teammates view the app on Streamlit Community Cloud
+The app demonstrates how modern credit scoring can be improved using **Large Language Models (LLMs)** to capture behavioural risk signals beyond traditional numeric fields.
 
-1) Push this repo to GitHub (PowerShell commands)
+---
 
-   # create a new repository on GitHub first, then run locally:
-   git init
-   git add .
-   git commit -m "Initial demo: LLM credit risk UI"
-   git branch -M main
-   git remote add origin https://github.com/<YOUR_ORG_OR_USERNAME>/<REPO_NAME>.git
-   git push -u origin main
+# 1. Industry Context
 
-Replace `<YOUR_ORG_OR_USERNAME>` and `<REPO_NAME>` with your values. If you use SSH, use the SSH remote URL.
+Traditional credit scoring models rely heavily on:
 
-2) Connect the repo to Streamlit Community Cloud
+- Income  
+- Credit score  
+- Liabilities  
+- Payment history  
 
-- Open https://share.streamlit.io and sign in with GitHub.
-- Click **New app** → choose your GitHub repo, branch `main`, and set `File path` to `backend/app.py`.
-- Click **Deploy**.
+But in real-world lending, **unstructured text** such as loan applications, explanations for late payments, or emails contains deeper behavioural cues:
 
-Notes for teammates
-- If you rely on OCR, the hosted Streamlit Cloud cannot install system packages (Tesseract) — use the Docker-based deploy or run locally with `requirements-ocr.txt` installed and Tesseract available on the host.
-- If the app uses external LLM API keys, add them under Streamlit app Settings → Secrets (or in GitHub Actions if you add automated deploys).
+- Tone and sentiment  
+- Financial stress indicators  
+- Contradictions  
+- Risky behaviour clues  
+- Repayment intention  
 
-Local run for testing
+LLMs make it possible to extract those insights and fuse them with structured data to produce **more accurate, fair, and explainable** risk assessments.
 
-PowerShell (from repo root):
+---
+
+# 2. Problem Statement
+
+**How can we design a reliable and transparent LLM-based method to evaluate credit risk using unstructured text alongside structured financial fields?**
+
+This prototype demonstrates a working solution.
+
+---
+
+# 3. Project Challenge
+
+Build a prototype that:
+
+- Uses an LLM to analyze unstructured text  
+- Extracts behavioural and contextual risk features  
+- Fuses text-based and numeric features  
+- Produces interpretable credit risk scores  
+- Visualizes results in an intuitive dashboard  
+
+---
+
+# 4. AI Opportunity
+
+### ✔ LLMs can interpret unstructured text  
+They detect sentiment, contradictions, behavioural patterns, and risky phrases.
+
+### ✔ Multi-modal scoring  
+The system merges:
+
+- Structured fields (income, age, loan amount)  
+- Extracted text fields (name, income from PDF, etc.)  
+- LLM behavioural signals  
+
+This mirrors modern underwriting practice where both **numbers and narrative** matter.
+
+---
+
+# 5. MVP Features
+
+## 5.1 ⭐ File Upload & Text Extraction
+
+Supported Formats:
+- CSV  
+- PDF  
+- PNG / JPG  
+
+Extraction Methods:
+- `pdfplumber` for PDFs  
+- `pytesseract` for OCR on images  
+- Fallback text decoding  
+
+(Handled inside `extract_text_from_file()`)
+
+---
+
+## 5.2 ⭐ Automatic Field Parsing (from documents)
+
+Regex heuristics extract:
+
+- Applicant name  
+- Age  
+- Annual income  
+- Requested loan amount  
+
+(via `parse_fields_from_text()`)
+
+This allows applicants to upload raw files and still receive structured scoring.
+
+---
+
+## 5.3 ⭐ LLM-Based Behavioural Feature Extraction
+
+Using:
+
 ```
-& ".\.venv\Scripts\Activate.ps1"  # if using venv
+integrations.run_feature_extraction()
+```
+
+The LLM extracts:
+- Summary  
+- Sentiment  
+- Risky phrases  
+- Contradictions  
+- Credibility score  
+- Narrative insights  
+- Behavioural warning indicators  
+
+These features are transformed into numerical inputs for risk scoring.
+
+---
+
+## 5.4 ⭐ Rule-Based Overrides
+
+To mimic real underwriting, the system includes rules such as:
+- Too many late payments → high risk  
+- Too many new accounts → high risk  
+- Stable employment + one late payment → moderate risk  
+
+These ensure reliability even when LLM text is complex.
+
+---
+
+## 5.5 ⭐ Risk Score Prediction
+
+Using:
+
+```
+integrations.predict()
+```
+
+The system outputs:
+- risk_score (0 to 1)  
+- risk_label (low / moderate / high)  
+- explanation text  
+
+---
+
+## 5.6 ⭐ Recommendation Logic
+
+| Risk Score | Decision |
+|------------|----------|
+| 0.70 – 1.00 | 🔴 Decline / Manual Review |
+| 0.40 – 0.69 | 🟡 Conditional Approval |
+| 0.00 – 0.39 | 🟢 Approve |
+
+This appears inside the **Final Recommendation** panel.
+
+---
+
+## 5.7 ⭐ Explainable Dashboard (Streamlit)
+
+Includes:
+- KPI cards (Applicants Count, Avg Income, High Risk %)  
+- Applicant table  
+- Local explanation panel  
+- Risk score breakdown  
+- Sentiment evaluation  
+- Extracted risk flags  
+- **Story Playback** (step-by-step reasoning replay)
+
+---
+
+# 6. Architecture Diagram
+
+```
+User Uploads File(s)
+        ↓
+Text Extraction (PDF/OCR)
+        ↓
+Field Parsing (Income, Name, etc.)
+        ↓
+LLM Behavioural Analysis
+        ↓
+Rule-Based Risk Overrides
+        ↓
+Risk Score Prediction
+        ↓
+Interactive Dashboard (Streamlit)
+```
+
+---
+
+# 7. How To Use
+
+## Step 1 — Install Requirements
+```
 pip install -r requirements.txt
-# optional OCR deps
-pip install -r requirements-ocr.txt
-streamlit run backend/app.py
 ```
 
-CI / GitHub Actions
-- This repo includes a simple CI that runs on pushes and PRs to `main` and checks Python syntax and installs requirements. See `.github/workflows/ci.yml`.
-
-If you want, I can add an optional workflow to automatically deploy on push using an external action — tell me whether you'd like automatic deployment and whether you will store Streamlit credentials as GitHub secrets.
-
----
-Project maintainer: edit the repository README and CI to match your org's process.
-# Track 2 — LLM-Based Risk Assessment for AI Credit Scoring
-
-Tagline: Surface behavioral risk signals from application text + tabular data using an LLM + fusion classifier and an interpretable Streamlit dashboard.
-
----
-
-## Summary
-
-Traditional credit scoring relies heavily on structured numeric features and can miss behavioral and contextual signals contained in unstructured text (loan essays, transaction notes, emails). This prototype demonstrates how an LLM can extract summaries and risk indicators from free-text, convert them into numeric features, fuse those features with tabular data, and present interpretable risk scores in a Streamlit dashboard.
-
-This repo contains a runnable Streamlit MVP that shows the end-to-end flow (upload → LLM extraction → feature engineering → classifier → explainability UI).
-
-## Repo layout
-
-- `backend/app.py` — Streamlit app (UI + demo pipeline).  
-- `backend/ui_helpers.py` — small reusable UI components (KPI cards, table renderer, highlight helper).  
-- `frontend/mock_index.html` — static mock page useful for slides.  
-- `requirements.txt` — minimal dependencies for deployment.  
-- `Procfile` — start command for Render.  
-
-Work for UI/UX live on branch `feature/ui-layout`.
-
-## MVP Features
-
-- Upload CSV (tabular + a `text_notes` column) or pick a demo dataset.  
-- Per-applicant LLM extraction: short summary, sentiment score, risky phrases/indicators.  
-- Convert LLM outputs into numeric features (e.g., `sentiment_score`, `risky_phrase_count`).  
-- Fuse text features with tabular features and run a classifier (heuristic / scikit-learn).  
-- Dashboard: KPI cards, interactive applicant table, explanation and evidence panel, basic fairness snapshot.
-
-## Quickstart — Run locally (Windows / PowerShell)
-
-1. Clone and checkout UI branch:
-
-```powershell
-git clone https://github.com/NgYueQhi-2025/Track2_llm-credit-risk.git
-cd Track2_llm-credit-risk
-git checkout feature/ui-layout
+## Step 2 — Run the App
+```
+streamlit run app.py
 ```
 
-2. Create & activate a Python virtual environment and install dependencies:
+## Step 3 — Upload Applicants
+Upload CSV or raw documents (PDF/JPG/PNG).
 
-```powershell
-py -3 -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-3. Run the app:
-
-```powershell
-python -m streamlit run backend\app.py
-# open http://localhost:8501 in your browser
-```
-
-Notes: if `streamlit` is not found, ensure `.venv` is activated. To avoid LLM API costs during demos, set `USE_MOCK_LLM=true` (see Environment Variables section).
-
-## Data format
-
-Expected CSV columns (minimum): `id`, `name`, `income`, `credit_score`, `text_notes`. Optional: `default_label` (supervised testing), `group` (for fairness checks).
-
-Demo synthetic examples are loaded by default if you don't upload a CSV.
-
-## Environment variables & secrets
-
-Use host secret managers (Streamlit Cloud / Render) or local `.streamlit/secrets.toml` for development. Do NOT commit secrets to the repo.
-
-Minimal (MVP) env vars (new and existing):
-
-- `USE_MOCK_LLM` — `true` / `false` (default `true` for demo).
-- `LLM_PROVIDER` — `openai` / `ollama` / `mock` (default `openai` if `USE_MOCK_LLM=false`).
-- `LOCAL_LLM_URL` — e.g. `http://127.0.0.1:11434` (when using a local Ollama-compatible HTTP gateway).
-- `OPENAI_API_KEY` — OpenAI key (only if using OpenAI).
-- `HF_API_TOKEN` — Hugging Face token (optional).
-- `CACHE_TTL_SECONDS` — e.g. `3600`.
-- `RANDOM_SEED` — e.g. `42` for reproducible demos.
-
-Access in code (example):
-
-```python
-import os
-import streamlit as st
-
-USE_MOCK = (os.environ.get('USE_MOCK_LLM','true').lower() == 'true')
-LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'openai')
-LOCAL_LLM_URL = os.environ.get('LOCAL_LLM_URL')
-OPENAI_API_KEY = st.secrets.get('OPENAI_API_KEY') if hasattr(st, 'secrets') else os.environ.get('OPENAI_API_KEY')
-```
-
-Notes:
-- `LLM_PROVIDER` controls which provider the `llms/backend/llm_handler.py` will attempt to use. The code supports `openai` (remote OpenAI API), `ollama` (local Ollama-compatible HTTP gateway), and `mock` (deterministic demo responses).
-- When `LLM_PROVIDER=ollama`, set `LOCAL_LLM_URL` to the base URL of your Ollama HTTP gateway (for example `http://127.0.0.1:11434`). The handler will attempt common Ollama-compatible endpoints and payload shapes.
-- For offline demos the repo includes a small mock Ollama server at `backend/artifacts/mock_ollama_server.py` which you can run locally to emulate a provider during development.
-
-Run the mock server (PowerShell):
-
-```powershell
-# from repo root
-# Ensure venv activated or use absolute python path
-python backend\artifacts\mock_ollama_server.py
-# Default: listens on http://127.0.0.1:11434
-```
-
-Use `LLM_PROVIDER=ollama` with `LOCAL_LLM_URL=http://127.0.0.1:11434` to point the app at the mock server for full-path testing without a paid provider.
-
-## Mock vs Live Flows (safe demo & production switch)
-
-This project supports two execution modes so you can demo reliably without external API calls (Mock mode) and switch to a Live LLM when you're ready.
-
-- Mock mode (recommended for demos / judging):
-    - The Streamlit UI includes a `Mock mode (no LLM/API)` checkbox in the sidebar. When enabled, the app will avoid real LLM API calls.
-    - If precomputed artifacts exist, the app will use them for deterministic outputs:
-        - `backend/artifacts/features.csv` — per-applicant numeric features (columns: `applicant_id`,`sentiment_score`,`risky_phrase_count`,`contradiction_flag`,`credibility_score`).
-        - `backend/artifacts/model.pkl` — a small `sklearn` model used for `predict_proba`. If present, the UI will use it to generate risk scores.
-    - A helper script `backend/artifacts/setup_demo.py` is provided to generate demo artifacts (toy `model.pkl`, `features.csv`, and `data/demo.csv`). Run it from the repo root:
-
-```powershell
-python backend\artifacts\setup_demo.py
-```
-
-    - After running the script, start the app and ensure the sidebar checkbox `Mock mode` is checked. The app will then: read `data/demo.csv` (or uploaded CSV), look up precomputed features in `backend/artifacts/features.csv` when possible, and use `backend/artifacts/model.pkl` to produce deterministic predictions.
-
-- Live mode (production / real LLM):
-    - Uncheck `Mock mode` in the UI or set `USE_MOCK_LLM=false` in your environment.
-    - Implement a real provider call inside `llms/backend/llm_handler.py` — currently the file contains a `call_llm` stub with a `mock` parameter and a simple on-disk caching helper. Replace the `mock=False` branch of `call_llm` with your provider call (OpenAI, HF, etc.) and ensure you load API keys from env vars or `st.secrets`.
-    - Example pattern inside `llms/backend/llm_handler.py`:
-
-```python
-# load API key securely
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-
-def call_llm(prompt, mode='summary', mock=False):
-        if mock:
-                return ... # existing mock
-        # call real provider here (openai.ChatCompletion.create or requests to an API)
-        # return a JSON-serializable string matching the existing mock outputs
-```
-
-Notes & tips:
-- The integrator layer (`backend/integrations.py`) implements retry logic (exponential backoff) for LLM extraction and will fall back to a deterministic heuristic if a model artifact is missing.
-- For reliable demos (no cost, deterministic results), use `Mock mode` and run `backend/artifacts/setup_demo.py` once to populate demo artifacts.
-- Keep secrets out of source control; use `st.secrets` or your host's secrets manager to provide `OPENAI_API_KEY` when running in Live mode.
-
-
-## Deployment
-
-### Streamlit Community Cloud (recommended)
-
-1. Push your branch to a repo accessible to your Streamlit account (fork if you are not the repo owner).  
-2. Go to https://share.streamlit.io and sign in with GitHub.  
-3. Click `New app`, select the repo and branch `feature/ui-layout`, and set the file to `backend/app.py`.  
-4. Add secrets in App Settings → Secrets (e.g., `OPENAI_API_KEY`) or set `USE_MOCK_LLM=true`.  
-
-Streamlit Cloud will install packages from `requirements.txt` and provide a persistent `https://...streamlitapp.com` URL.
-
-### Render (alternative)
-
-- Ensure `requirements.txt` and `Procfile` are present.  
-- Build command: `pip install -r requirements.txt`  
-- Start command (or use Procfile):
-
-```
-streamlit run backend/app.py --server.port $PORT --server.address 0.0.0.0
-```
-
-Add environment variables (OPENAI_API_KEY, USE_MOCK_LLM) in the Render dashboard. Render will provide a public URL.
-
-### Temporary sharing
-
-For quick demos you can use `cloudflared` or `ngrok` to expose `localhost:8501` with a temporary public URL — do not use this for production or to expose sensitive data.
-
-## Architecture (overview)
-
-```
-[CSV + text] -> Preprocessing -> LLM API (summaries, risk indicators)
-            -> Text -> numeric features -> Classifier (LogReg/RF/heuristic)
-            -> Explainability (evidence sentences) -> Dashboard (Streamlit)
-```
-
-## Explainability & UI
-
-For each applicant the UI shows: original text, LLM summary, extracted indicators (sentiment, risky phrases), numeric risk score, risk label, and a mock feature-contribution listing. The dashboard emphasizes evidence-first explanations and a recommended action.
-
-## Testing & QA
-
-- Smoke test: upload demo CSV → Run Pipeline → Verify table, KPIs, and explanation panel.  
-- Use `USE_MOCK_LLM=true` for cost-free testing.  
-- Add unit tests for feature engineering and any model-training code where appropriate.
-
-## Slides & Screenshots
-
-- Capture: KPI header + applicant table, explanation panel with highlighted evidence, and fairness chart.  
-- Save screenshots to `frontend/` and include them in slides.  
-
-## Contribution
-
-- Branch from `feature/ui-layout` for UI work.  
-- Keep PRs focused and include testing steps in PR descriptions.  
-
-## License
-
-Add your preferred license (MIT recommended for demos) and include a `LICENSE` file if desired.
-
-## Team & Contact
-
-- UI/UX Lead: Member B — Esther (GitHub: `25-ESTHERKONG`)  
-- Backend / Model: (fill in team members)  
+## Step 4 — Click **Run Model**
+View:
+- Summary  
+- Sentiment  
+- Extracted risky phrases  
+- Risk flags  
+- Final score  
+- Recommendation  
 
 ---
 
-If you want, I can also add a short `docs/` slide text or export-ready screenshots after you deploy. Open an issue or request for any additions.
-# Track2_llm-credit-risk
+# 8. Folder Structure
+
+```
+backend/app.py                 # Main Streamlit application
+backend/integrations.py        # LLM + heuristic feature extraction + scoring
+backend/ui_helpers.py          # KPI cards, tables, helpers
+requirements.txt
+data/
+```
 
 ---
 
-## Auto-sync helper (keep workspace up-to-date)
+# 9. Deployment
 
-This repository includes a small, intentionally conservative auto-sync helper to keep your local clone up-to-date with `origin/main`.
+This app can be deployed on:
 
-- `tools/auto_sync/auto_sync.ps1`: PowerShell script that fetches from the remote and attempts a `git pull --ff-only` on `origin/main` at a configurable interval (default 5 minutes). It will stop if a non-fast-forward update is required so you can resolve conflicts manually.
-- `.vscode/tasks.json`: VS Code task `Auto Sync Repo (PowerShell)` — run this task to start the sync loop in a dedicated terminal.
+- Streamlit Community Cloud  
+- Render  
+- Local Docker environment  
 
-Usage:
+Deployment Steps:
+1. Push repo to GitHub  
+2. Open Streamlit Cloud  
+3. Select repository and choose `app.py` as entry file  
+4. Add secrets (API keys if needed)  
 
-1. From VS Code: open the Command Palette → `Tasks: Run Task` → `Auto Sync Repo (PowerShell)`.
-2. Or run directly in PowerShell from the repo root:
+---
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\auto_sync\auto_sync.ps1 -IntervalMinutes 5
-```
+# 10. Judging Criteria Alignment
 
-Notes:
+### ✔ Improved Credit Decision-Making
+Uses behavioural + numeric indicators.
 
-- The script only performs fast-forward pulls to avoid creating automatic merge commits or conflicts.
-- If your branch has diverged from the remote (non-fast-forward), the script prints instructions and stops — resolve manually before re-enabling auto-sync.
-- Adjust `-IntervalMinutes` to a value that suits your workflow.
+### ✔ Effective Use of LLM Textual Analysis
+Extracts narrative meaning and risk signals.
+
+### ✔ Interpretability
+Shows evidence, summaries, and explanations.
+
+### ✔ End-to-End Functionality
+Complete pipeline from upload → extraction → scoring → dashboard.
+
+---
+
+# 11. Team Members
+* Member A (Backend Lead): Repo setup, Architecture.
+* Member B (UI/UX Lead): Streamlit layout, Visuals.
+* Member C (Integrator): Wiring Backend to UI, Error handling.
+* Member D (AI/LLM): Prompts, Feature Engineering, Model Training.
+* Member E (Testing/Demo): QA, Fairness checks, Demo recording.
+
+---
+
+# 12. License
+MIT
+
+---
