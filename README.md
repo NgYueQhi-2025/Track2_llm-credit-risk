@@ -280,7 +280,7 @@ Complete pipeline from upload → extraction → scoring → dashboard.
 ---
 
 # 12. Team Members
-* Esther Kong Yuan Er(UI Lead): Streamlit layout, Visuals.
+* Esther Kong Yuan Er (UI Lead): Streamlit layout, Visuals.
 * Lim Hui Yun (Integrator): Wiring Backend to UI, Error handling.
 * Lim Xuan Ning (AI/LLM): Prompts, Feature Engineering, Model Training.
 * Ee Mei Xuan (Testing/Demo): QA, Fairness checks, Demo recording.
