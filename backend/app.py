@@ -144,7 +144,8 @@ def extract_text_from_file(uploaded_file) -> str:
                         continue
                 content = "\n\n".join([t for t in texts if t])
                 if content:
-                    return (content[:2000] + "...") if len(content) > 2000 else content
+                    # Return full extracted text (do not aggressively truncate)
+                    return content
         except Exception:
             # If pdfplumber fails on this file, continue to other methods
             pass
@@ -182,7 +183,8 @@ def extract_text_from_file(uploaded_file) -> str:
             img = Image.open(uploaded_file)
             text = pytesseract.image_to_string(img)
             if text and text.strip():
-                return (text[:2000] + "...") if len(text) > 2000 else text
+                # Return full OCR text (allow downstream logic to truncate/show previews)
+                return text
         except Exception:
             pass
     except Exception:
@@ -204,7 +206,8 @@ def extract_text_from_file(uploaded_file) -> str:
         content = None
 
     if content:
-        return (content[:300] + "...") if len(content) > 300 else content
+        # Return full fallback-decoded content
+        return content
     return f"[Extracted text unavailable for {name}]"
 
 
@@ -399,29 +402,70 @@ def main() -> None:
         else:
             rows = []
             next_id = 1
-            # If user provided multiple files, give them incremental numeric ids
+            # If user provided multiple files, detect if each file contains
+            # one or more loan applications and create one row per detected
+            # application chunk. Use integrations.split_text_into_applications
+            # to handle PDFs that bundle many applications into a single file.
             for f in uploaded_files:
-                text = extract_text_from_file(f)
-                parsed = parse_fields_from_text(text, getattr(f, 'name', ''))
-                # Store extracted text in 'text_notes' for feature extraction to analyze
-                full_text = parsed.get('text_notes') or text
-                row = {
-                    'id': next_id,
-                    'name': parsed.get('name') or getattr(f, 'name', '') or f"applicant_{next_id}",
-                    'age': parsed.get('age'),
-                    'income': parsed.get('income'),
-                    'requested_loan': parsed.get('requested_loan'),
-                    'credit_score': None,
-                    'text_notes': full_text,  # Full text for LLM analysis
-                    'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
-                }
-                rows.append(row)
-                next_id += 1
+                text = extract_text_from_file(f) or ""
+                try:
+                    chunks = integrations.split_text_into_applications(text)
+                except Exception:
+                    chunks = [text]
+
+                for chunk in chunks:
+                    parsed = parse_fields_from_text(chunk, getattr(f, 'name', ''))
+                    # Store extracted text in 'text_notes' for feature extraction to analyze
+                    full_text = parsed.get('text_notes') or chunk or text
+                    row = {
+                        'id': next_id,
+                        'name': parsed.get('name') or getattr(f, 'name', '') or f"applicant_{next_id}",
+                        'source_file': getattr(f, 'name', '') or '',
+                        'age': parsed.get('age'),
+                        'income': parsed.get('income'),
+                        'requested_loan': parsed.get('requested_loan'),
+                        'credit_score': None,
+                        'text_notes': full_text,  # Full text for LLM analysis
+                        'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
+                    }
+                    rows.append(row)
+                    next_id += 1
             df = pd.DataFrame(rows)
     else:
         # Demo datasets removed: require user-provided files for analysis.
         df = pd.DataFrame()
         st.info("Please upload applicant documents or a CSV to analyze. Demo datasets have been removed; upload your own files.")
+
+    # Small UI note: show detected applicant / file counts immediately after upload
+    try:
+        uploaded_count = len(uploaded_files) if 'uploaded_files' in locals() and uploaded_files else 0
+    except Exception:
+        uploaded_count = 0
+    try:
+        applicant_count = len(df) if hasattr(df, '__len__') else 0
+    except Exception:
+        applicant_count = 0
+    if uploaded_count > 0:
+        st.info(f"Detected {applicant_count} applicant{'s' if applicant_count != 1 else ''} from {uploaded_count} uploaded file{'s' if uploaded_count != 1 else ''}. Multi-application PDFs will be split into separate applicants automatically.")
+        # Per-file breakdown
+        try:
+            per_file = {}
+            if not df.empty and 'source_file' in df.columns:
+                for s in df['source_file'].fillna('unknown').tolist():
+                    key = s or 'unknown'
+                    per_file[key] = per_file.get(key, 0) + 1
+        except Exception:
+            per_file = {}
+
+        if per_file:
+            with st.expander("Per-file breakdown (applicants per uploaded file)"):
+                try:
+                    pf_rows = [{'file': k, 'applicants': v} for k, v in per_file.items()]
+                    pf_df = pd.DataFrame(pf_rows)
+                    st.table(pf_df)
+                except Exception:
+                    for k, v in per_file.items():
+                        st.write(f"- {k}: {v} applicant{'s' if v != 1 else ''}")
 
     # Top KPI cards
     k1, k2, k3 = st.columns([1, 1, 1])
