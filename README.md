@@ -19,9 +19,9 @@ The app demonstrates how modern credit scoring can be improved using **Large Lan
 # 1. Industry Context
 
 Traditional credit scoring models are often "blind" to context. They rely heavily on:
-**Strict Numerics:** Income, FICO score, and liability counts.
-**Missing Context:** They ignore explanations for late payments or behavioral cues in application letters.
-**Black Box Logic:** Decisions are often hard to explain to the applicant 
+- **Strict Numerics:** Income, FICO score, and liability counts.
+- **Missing Context:** They ignore explanations for late payments or behavioral cues in application letters.
+- **Black Box Logic:** Decisions are often hard to explain to the applicant 
 
 But in real-world lending, **unstructured text** such as loan applications, explanations for late payments, or emails contains deeper behavioural cues:
 
