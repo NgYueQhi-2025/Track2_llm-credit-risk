@@ -1,11 +1,4 @@
-id,name,income,credit_score,text_notes,default_label
-1,Alice Tan,5200,720,"I always pay my bills on time and have stable income. Applying for a small loan to renovate my kitchen.",0
-2,Ben Lee,3000,650,"Recently changed jobs but expect stable income soon. Need loan to cover moving expenses.",0
-3,Chong Mei Ling,1800,580,"I missed a few payments last year due to medical bills but I am recovering financially.",1
-4,Daniel Wong,2500,500,"I have multiple outstanding loans and struggling to repay them on time.",1
-5,Eva Koh,7000,760,"Strong financial background, saving regularly. Loan needed for investment property downpayment.",0
-6,Farid Rahman,2200,540,"Income is unstable because freelance. I hope to consolidate my debt but unsure about monthly payments.",1
-7,Grace Lim,4300,680,"I normally pay on time but had one late payment due to travel. Loan for car purchase.",0
-8,Hafiz Abdullah,1500,480,"Lost job recently and currently looking for new work. Need emergency funds.",1
-9,Ivy Chan,9000,800,"High income and good credit history. Loan to expand small business.",0
-10,Jeremy Ng,2000,560,"I have been borrowing from friends and family. Struggling to handle expenses.",1
+id,name,age,income
+101,Alice A.,31,52000
+102,Bob A.,45,72000
+103,Carol A.,38,31000

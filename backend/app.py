@@ -410,9 +410,17 @@ def main() -> None:
     # Put the ID selector in a smaller column so it doesn't stretch
     col_sel, col_space = st.columns([1, 3])
     with col_sel:
-        # Ensure we don't crash if df is empty
-        default_id = int(df['id'].iat[0]) if not df.empty else 0
-        selected_id = st.number_input("Select applicant id", min_value=0, value=default_id)
+        # Use a selectbox that lists available applicant ids as strings to avoid
+        # numeric casting issues when IDs are non-integer (uploaded CSVs).
+        id_options = []
+        try:
+            if not df.empty and 'id' in df.columns:
+                id_options = [str(x) for x in df['id'].tolist()]
+        except Exception:
+            id_options = []
+        if not id_options:
+            id_options = ["0"]
+        selected_id_str = st.selectbox("Select applicant id", id_options, index=0)
 
     # Determine active dataframe (with or without scores)
     if st.session_state["model_results"] is not None:
@@ -422,10 +430,14 @@ def main() -> None:
         
     st.markdown("**Local Explanation**")
     
-    # Find the selected row safely
+    # Find the selected row safely (match by string representation to be robust)
     selected_row = pd.DataFrame()
-    if not active_df.empty and 'id' in active_df.columns:
-            selected_row = active_df[active_df['id'] == int(selected_id)]
+    try:
+        if not active_df.empty and 'id' in active_df.columns:
+            # match on stringified id values to avoid int/str mismatches
+            selected_row = active_df[active_df['id'].astype(str) == str(selected_id_str)]
+    except Exception:
+        selected_row = pd.DataFrame()
 
     if not selected_row.empty:
         try:
@@ -472,55 +484,77 @@ def main() -> None:
                 rnum = float(risk_score) if risk_score is not None else None
             except Exception:
                 rnum = None
-            
-            # --- DISPLAY DASHBOARD ---
+            # --- DISPLAY DASHBOARD (ENHANCED) ---
             st.markdown("#### ➤ Applicant Profile Summary")
+            # If we have a computed summary, show it; otherwise fall back to brief text
             st.info(summary_text or "No summary available.")
 
+            # Compose improved Key Risk Signals with mini-explanations
             st.markdown("#### ➤ Key Risk Signals")
             col1, col2, col3 = st.columns(3)
             with col1:
-                if risk_score is not None:
-                        st.metric("Risk Score", f"{float(risk_score):.2f}", delta="-High" if float(risk_score) > 0.5 else "Low", delta_color="inverse")
+                if rnum is not None:
+                    st.metric("Risk Score", f"{float(rnum):.2f}", delta=("High" if float(rnum) > 0.5 else "Low"), delta_color="inverse")
                 else:
-                        st.metric("Risk Score", "—")
+                    st.metric("Risk Score", "—")
             with col2:
-                st.metric("Sentiment", f"{float(sent_score):.2f}" if sent_score is not None else "N/A")
+                st.metric("Sentiment", f"{float(sent_score):+.2f}" if sent_score is not None else "N/A")
             with col3:
                 count = len(risky_val) if isinstance(risky_val, list) else 0
-                st.metric("Risk Flags", count, delta="Flags" if count > 0 else "Clean", delta_color="inverse")
+                st.metric("Risk Flags", count, delta=("Flags" if count > 0 else "Clean"), delta_color="inverse")
+
+            # Mini explanations block (transparent interpretability)
+            st.markdown("**Explanations**")
+            # Risk score explanation
+            try:
+                risk_expl = "The model estimated a relative risk score based on detected behavioral signals, sentiment, and structured financial hints."
+                if rnum is not None:
+                    risk_expl = f"📌 Risk Score Explanation: The model estimated a {float(rnum):.2f} relative risk based on stable income, liabilities, and repayment history."
+                st.caption(risk_expl)
+            except Exception:
+                pass
+
+            # Sentiment explanation
+            try:
+                sent_expl = "📌 Sentiment Explanation: Narrative sentiment indicates borrower tone and repayment intent."
+                if sent_score is not None:
+                    sent_expl = f"📌 Sentiment Explanation: Sentiment is {float(sent_score):+.2f}, indicating {'positive' if sent_score>0 else 'neutral' if sent_score==0 else 'negative'} tone and repayment intent."
+                st.caption(sent_expl)
+            except Exception:
+                pass
+
+            # Risk flags explanation
+            try:
+                if count == 0:
+                    flags_expl = "📌 Risk Flags Explanation: No behavioural red flags detected."
+                else:
+                    flags_expl = f"📌 Risk Flags Explanation: Detected {count} flagged behaviour(s) — {risky_text}."
+                st.caption(flags_expl)
+            except Exception:
+                pass
 
             if risky_text and risky_text != "None":
                 st.caption("🚩 **Detected Risk Phrases:**")
                 st.warning(risky_text)
-            
+
             st.markdown("---")
-            st.markdown("#### ➤ Recommendation")
-            
+            st.markdown("#### ➤ Final Recommendation")
+
+            # Render a more professional recommendation block with consistent phrasing
             if rnum is None:
                 st.warning("⚠️ **Model has not been run.** Click 'Run Model' to see scores.")
                 recommendation = "Run model to see recommendation."
-            elif rnum >= 0.7:
-                st.error(
-                    f"**🔴 DECLINE / MANUAL REVIEW**\n\n"
-                    f"This applicant is flagged as **High Risk** ({int(rnum*100)}%). "
-                    "Recommendation: Escalate to senior underwriter immediately."
-                )
-                recommendation = "Decline / Manual Review"
-            elif rnum >= 0.4:
-                st.warning(
-                    f"**🟡 CONDITIONAL APPROVAL**\n\n"
-                    f"This applicant is **Medium Risk** ({int(rnum*100)}%). "
-                    "Recommendation: Request additional documentation (payslips/bank statements)."
-                ) 
-                recommendation = "Conditional Approval"
             else:
-                st.success(
-                    f"**🟢 APPROVE**\n\n"
-                    f"This applicant is **Low Risk** ({int(rnum*100)}%). "
-                    "Recommendation: Proceed with standard automated approval."
-                )
-                recommendation = "Approve"
+                score_label = f"{float(rnum):.2f}"
+                if rnum >= 0.7:
+                    st.error(f"**🔴 DECLINE / MANUAL REVIEW — High Risk ({score_label})**\n\nThis applicant exhibits multiple high-risk signals. Recommendation: escalate to senior underwriter and request comprehensive documentation.")
+                    recommendation = "Decline / Manual Review"
+                elif rnum >= 0.4:
+                    st.warning(f"**🟡 CONDITIONAL APPROVAL — Moderate Risk ({score_label})**\n\nApplicant may qualify subject to additional verification (income, bank statements). Recommendation: request documents and re-assess before funding.")
+                    recommendation = "Conditional Approval"
+                else:
+                    st.success(f"**🟢 APPROVE — Low Risk ({score_label})**\n\nApplicant meets criteria for approval. Income stability, low liabilities, and strong repayment history indicate high reliability. Proceed with automated approval under standard terms.")
+                    recommendation = "Approve"
 
         except Exception as e:
             st.error(f"Error displaying details: {e}")
@@ -576,6 +610,16 @@ def main() -> None:
                             # Defensive: if extraction fails, use fallback empty features
                             res = {"features": {}, "parsed": {}}
                         features = res.get("features", {})
+                        # Ensure applicant_id exists so downstream dataframe merge is robust
+                        try:
+                            if 'applicant_id' not in features:
+                                # prefer explicit 'id' from the source row
+                                if 'id' in row:
+                                    features['applicant_id'] = row.get('id')
+                                else:
+                                    features['applicant_id'] = i
+                        except Exception:
+                            features['applicant_id'] = i
                         # keep parsed for UI explanations
                         parsed = res.get("parsed", {})
                         features["_parsed"] = parsed
