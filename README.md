@@ -167,7 +167,6 @@ Includes:
 - Risk score breakdown  
 - Sentiment evaluation  
 - Extracted risk flags  
-- **Story Playback** (step-by-step reasoning replay)
 
 ---
 
