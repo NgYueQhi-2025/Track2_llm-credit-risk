@@ -1,3 +1,13 @@
+
+# app.py — Modified full version (based on user's original file)
+# Changes:
+# - Improved image OCR with pytesseract + pre-processing
+# - Clean OCR text function
+# - Expanded parse_fields_from_text to extract employment_status, credit_score, loan_purpose
+# - Updated row creation to include new fields
+# - Compatible with existing integrations.py and UI logic
+# Original base file: see project upload. fileciteturn1file0
+
 import time
 from typing import Optional
 import os
@@ -115,11 +125,84 @@ def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
 
+def extract_text_from_image(uploaded_file) -> str:
+    """Perform basic preprocessing and OCR on an uploaded image (PNG/JPG)."""
+    try:
+        from PIL import Image, ImageEnhance, ImageFilter
+    except Exception as e:
+        raise RuntimeError("Pillow library is required for image OCR. Install with `pip install pillow`") from e
+
+    try:
+        import pytesseract
+    except Exception as e:
+        raise RuntimeError("pytesseract is required for OCR. Install with `pip install pytesseract` and ensure tesseract binary is installed.") from e
+
+    # Seek to start
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
+    # Open image
+    try:
+        img = Image.open(uploaded_file)
+    except Exception:
+        # If PIL cannot open, return empty string
+        return ""
+
+    # Convert to grayscale and enhance contrast and reduce noise
+    try:
+        img = img.convert("L")
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.8)
+    except Exception:
+        pass
+
+    # Auto-detect tesseract binary
+    try:
+        t_path = shutil.which("tesseract")
+        if t_path:
+            pytesseract.pytesseract.tesseract_cmd = t_path
+    except Exception:
+        pass
+
+    # Use an OCR config tuned for block of text (psm 6) and best accuracy (oem 3)
+    custom_config = r"--oem 3 --psm 6"
+    try:
+        text = pytesseract.image_to_string(img, config=custom_config)
+    except Exception:
+        # fallback to default call
+        text = pytesseract.image_to_string(img)
+
+    # Basic cleanup
+    text = text.replace("\r", "\n")
+    text = "\n".join([ln.rstrip() for ln in text.splitlines() if ln.strip() != ""])
+    # limit length for UI but keep full text where needed
+    return text.strip()
+
+
+def clean_ocr_text(text: str) -> str:
+    """Clean OCR artifacts and non-ASCII garbage from extracted text."""
+    import re
+    if not isinstance(text, str):
+        return text
+    text = text.replace("—", "-")
+    # Remove non-printable characters
+    text = re.sub(r"[^\x09\x0A\x0D\x20-\x7E]+", " ", text)
+    # Collapse multiple spaces/newlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    # Trim whitespace on each line
+    text = "\n".join([ln.strip() for ln in text.splitlines()])
+    return text.strip()
+
+
 def extract_text_from_file(uploaded_file) -> str:
     """Try to extract text from uploaded files.
 
     - For PDFs: use `pdfplumber` when available.
-    - For images: use `pytesseract` + `Pillow` when available.
+    - For images: use `pytesseract` + `Pillow` when available with preprocessing.
     - Fallback: attempt to decode raw bytes or return a short placeholder.
     """
     name = getattr(uploaded_file, "name", "uploaded_file")
@@ -144,6 +227,7 @@ def extract_text_from_file(uploaded_file) -> str:
                         continue
                 content = "\n\n".join([t for t in texts if t])
                 if content:
+                    content = clean_ocr_text(content)
                     return (content[:2000] + "...") if len(content) > 2000 else content
         except Exception:
             # If pdfplumber fails on this file, continue to other methods
@@ -152,39 +236,14 @@ def extract_text_from_file(uploaded_file) -> str:
         # pdfplumber not installed; skip PDF parsing
         pass
 
-    # Try image OCR
+    # Try image OCR (PNG/JPG)
     try:
-        from PIL import Image
-        import pytesseract
-
-        # Auto-detect tesseract binary if available (useful on Windows)
-        def _find_tesseract_cmd() -> str | None:
-            # 1) In PATH
-            p = shutil.which("tesseract")
-            if p:
-                return p
-            # 2) Common Windows install locations
-            candidates = [
-                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-            ]
-            for c in candidates:
-                if Path(c).exists():
-                    return c
-            return None
-
-        try:
-            tcmd = _find_tesseract_cmd()
-            if tcmd:
-                pytesseract.pytesseract.tesseract_cmd = tcmd
-
-            uploaded_file.seek(0)
-            img = Image.open(uploaded_file)
-            text = pytesseract.image_to_string(img)
-            if text and text.strip():
+        lower_name = str(name).lower()
+        if lower_name.endswith((".png", ".jpg", ".jpeg")):
+            text = extract_text_from_image(uploaded_file)
+            if text:
+                text = clean_ocr_text(text)
                 return (text[:2000] + "...") if len(text) > 2000 else text
-        except Exception:
-            pass
     except Exception:
         # OCR deps not installed; skip image OCR
         pass
@@ -204,20 +263,22 @@ def extract_text_from_file(uploaded_file) -> str:
         content = None
 
     if content:
+        content = clean_ocr_text(content)
         return (content[:300] + "...") if len(content) > 300 else content
     return f"[Extracted text unavailable for {name}]"
 
 
 def parse_fields_from_text(text: str, filename: str = "") -> dict:
-    """Extract common applicant fields from document text using regex heuristics.
+    """Extract applicant fields from document text using regex heuristics.
 
-    Looks for patterns like:
-    - Applicant Name: <name>
-    - Applicant Age: <digits>
-    - Annual Household Income: $<number>
-    - Requested Loan Amount: $<number>
-
-    Returns a dict with keys: `name`, `age`, `income`, `requested_loan`, `text_notes`.
+    Extended to capture:
+    - Applicant Name
+    - Age
+    - Annual Income
+    - Requested Loan Amount
+    - Employment Status
+    - Credit Score (3-digit)
+    - Purpose of Loan
     """
     import re
 
@@ -226,59 +287,99 @@ def parse_fields_from_text(text: str, filename: str = "") -> dict:
         "age": None,
         "income": None,
         "requested_loan": None,
+        "employment_status": None,
+        "credit_score": None,
+        "loan_purpose": None,
         "text_notes": text,
     }
 
     if not text:
+        # fallback to filename if no text
+        if filename:
+            out["name"] = os.path.splitext(os.path.basename(filename))[0]
         return out
 
-    # Normalize whitespace
-    t = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
+    # Keep original text for downstream LLM analysis but normalize for parsing
+    raw = text or ""
+    # normalize newlines and spaces for regex convenience
+    t = " ".join([ln.strip() for ln in raw.splitlines() if ln.strip()]).strip()
 
-    # Name: look for 'Applicant Name:' or 'Name:' prefixes
-    m = re.search(r"Applicant Name:\s*(.+?)(?:\n|Applicant Age:|Applicant|$)", t, flags=re.IGNORECASE)
-    if not m:
-        m = re.search(r"\bName:\s*(.+?)(?:\n|$)", t, flags=re.IGNORECASE)
+    # --- Name detection ---
+    m = re.search(r"(Applicant Name|Name)[:\s]+([A-Za-z\.,'\- ]{2,60})(?:\s{2,}|,|$)", t, flags=re.I)
     if m:
-        out["name"] = m.group(1).strip().rstrip(',')
+        out["name"] = m.group(2).strip().strip(",")
+    else:
+        # try common name patterns: First Last
+        m2 = re.search(r"^([A-Z][a-z]+ [A-Z][a-z]+)", t)
+        if m2:
+            out["name"] = m2.group(1).strip()
 
-    # Age
-    m = re.search(r"Applicant Age:\s*(\d{1,3})", t, flags=re.IGNORECASE)
+    # --- Age ---
+    m = re.search(r"(Applicant Age|Age)[:\s]+(\d{1,3})\b", t, flags=re.I)
     if not m:
-        m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.IGNORECASE)
+        m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.I)
     if m:
         try:
-            out["age"] = int(m.group(1))
+            out["age"] = int(m.group(2)) if m.group(2).isdigit() else int(m.group(1))
         except Exception:
-            out["age"] = None
+            try:
+                out["age"] = int(m.group(1))
+            except Exception:
+                out["age"] = None
 
-    # Income
-    m = re.search(r"Annual Household Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
-    if not m:
-        m = re.search(r"Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    # --- Income ---
+    m = re.search(r"(Annual Household Income|Annual Income|Income|Salary)[:\s]+\$?([0-9,]+)\b", t, flags=re.I)
     if m:
-        s = m.group(1).replace(',', '')
+        s = m.group(2).replace(",", "")
         try:
             out["income"] = int(s)
         except Exception:
             out["income"] = None
 
-    # Requested loan
-    m = re.search(r"Requested Loan Amount:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
-    if not m:
-        m = re.search(r"Requested Loan:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+    # --- Requested loan amount ---
+    m = re.search(r"(Requested Loan Amount|Requested Loan|Loan Amount|Requested Amount)[:\s]+\$?([0-9,]+)\b", t, flags=re.I)
     if m:
-        s = m.group(1).replace(',', '')
+        s = m.group(2).replace(",", "")
         try:
             out["requested_loan"] = int(s)
         except Exception:
             out["requested_loan"] = None
 
-    # If name missing, fallback to filename as a human-friendly name
+    # --- Employment Status / Job Title ---
+    m = re.search(r"(Employment Status|Employment|Job Title|Position)[:\s]+([A-Za-z0-9 \-/,&]+?)(?= (?:Annual|Income|Salary|Age|Requested|Credit|Purpose|$))", t, flags=re.I)
+    if m:
+        out["employment_status"] = m.group(2).strip()
+
+    # --- Credit Score ---
+    m = re.search(r"(Credit Score)[:\s]+(\d{3})\b", t, flags=re.I)
+    if m:
+        try:
+            out["credit_score"] = int(m.group(2))
+        except Exception:
+            out["credit_score"] = None
+    else:
+        # capture patterns like 'score: 720' or '720 credit'
+        m2 = re.search(r"\b(?:score[:\s]|credit[:\s])(\d{3})\b", t, flags=re.I)
+        if m2:
+            try:
+                out["credit_score"] = int(m2.group(1))
+            except Exception:
+                out["credit_score"] = None
+
+    # --- Loan purpose ---
+    m = re.search(r"(Purpose of Loan|Purpose|Loan Purpose|Reason)[:\s]+([A-Za-z0-9 ,\-]{3,200})(?= (?:Amount|Requested|Income|Credit|$))", t, flags=re.I)
+    if m:
+        out["loan_purpose"] = m.group(2).strip()
+
+    # Fallbacks
     if not out.get("name") and filename:
         out["name"] = os.path.splitext(os.path.basename(filename))[0]
 
+    # attach cleaned text as text_notes (full)
+    out["text_notes"] = raw
+
     return out
+
 
 def main() -> None:
     # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
@@ -413,7 +514,9 @@ def main() -> None:
                     'age': parsed.get('age'),
                     'income': parsed.get('income'),
                     'requested_loan': parsed.get('requested_loan'),
-                    'credit_score': None,
+                    'employment_status': parsed.get('employment_status'),
+                    'credit_score': parsed.get('credit_score'),
+                    'loan_purpose': parsed.get('loan_purpose'),
                     'text_notes': full_text,  # Full text for LLM analysis
                     'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
                 }
@@ -438,7 +541,7 @@ def main() -> None:
         avg_income_display = "—"
 
     ui_helpers.kpi_card(k2, "Avg Income", avg_income_display)
-    
+
     # Calculate High Risk % from saved results if available
     if st.session_state["model_results"] is not None:
           res_df = st.session_state["model_results"]
@@ -452,7 +555,7 @@ def main() -> None:
 
 
     # --- LAYOUT UPDATE: STACKED SECTIONS ---
-    
+
     # 1. Applicant Table (Full Width)
     st.subheader("Applicant Table")
     display_df = st.session_state["model_results"] if st.session_state["model_results"] is not None else df
@@ -483,9 +586,9 @@ def main() -> None:
         active_df = st.session_state["model_results"]
     else:
         active_df = df
-        
+
     st.markdown("**Local Explanation**")
-    
+
     # Find the selected row safely (match by string representation to be robust)
     selected_row = pd.DataFrame()
     try:
@@ -499,7 +602,7 @@ def main() -> None:
         try:
             # Use iloc[0] on the filtered result
             r = selected_row.iloc[0]
-            
+
             # Prefer any already-computed summary field
             if isinstance(r.get('summary'), str) and r.get('summary').strip():
                 summary_text = r.get('summary')
@@ -534,7 +637,7 @@ def main() -> None:
 
             # risk_score may not be present before run; try fallback fields
             risk_score = r.get('risk_score') or r.get('score') or (feats.get('risk_score') if 'feats' in locals() else None)
-            
+
             # Simple recommendation heuristic
             try:
                 rnum = float(risk_score) if risk_score is not None else None
@@ -558,6 +661,22 @@ def main() -> None:
             with col3:
                 count = len(risky_val) if isinstance(risky_val, list) else 0
                 st.metric("Risk Flags", count, delta=("Flags" if count > 0 else "Clean"), delta_color="inverse")
+
+            # Show some of the structured fields extracted from OCR
+            st.markdown("#### ➤ Structured Fields (extracted)")
+            sf1, sf2, sf3, sf4 = st.columns(4)
+            with sf1:
+                st.caption("Employment")
+                st.write(r.get('employment_status') or "Unknown")
+            with sf2:
+                st.caption("Credit Score")
+                st.write(r.get('credit_score') or "Unknown")
+            with sf3:
+                st.caption("Requested Loan")
+                st.write(r.get('requested_loan') or "Unknown")
+            with sf4:
+                st.caption("Loan Purpose")
+                st.write(r.get('loan_purpose') or "Unknown")
 
             # Mini explanations block (transparent interpretability)
             st.markdown("**Explanations**")
@@ -677,7 +796,7 @@ def main() -> None:
                         except Exception:
                             features['applicant_id'] = i
                         # keep parsed for UI explanations
-                        parsed = res.get("parsed", {})
+                        parsed = res.get('parsed', {})
                         features["_parsed"] = parsed
                         # normalize parsed into flat fields for display and merging
                         try:
@@ -692,6 +811,15 @@ def main() -> None:
                             else:
                                 if k not in features or features.get(k) is None:
                                     features[k] = v
+                        # Also include structured OCR fields from the original df row (if present)
+                        try:
+                            # e.g., credit_score, employment_status, requested_loan, loan_purpose
+                            for fld in ['credit_score', 'employment_status', 'requested_loan', 'loan_purpose', 'income', 'age', 'name']:
+                                if fld in row and (fld not in features or features.get(fld) is None):
+                                    features[fld] = row.get(fld)
+                        except Exception:
+                            pass
+
                         features_list.append(features)
                         rows.append(row.to_dict())
                     progress.progress(90)
@@ -702,10 +830,10 @@ def main() -> None:
                         pred = integrations.predict(feat)
                         merged = {**feat, **pred}
                         preds_rows.append(merged)
-                    
+
                     # convert to DataFrame
                     preds_df = pd.DataFrame(preds_rows)
-                    
+
                     # join on applicant id where possible
                     if "id" in df.columns:
                         preds_df = preds_df.rename(columns={"applicant_id": "id"})
@@ -717,10 +845,10 @@ def main() -> None:
                         out_df = df.merge(preds_df, on="id", how="left")
                     else:
                         out_df = pd.concat([df.reset_index(drop=True), preds_df.reset_index(drop=True)], axis=1)
-                    
+
                     st.session_state["model_results"] = out_df
                     progress.progress(100)
-                
+
                 st.success("Completed model run")
                 # Force rerun to update all components (tables, KPIs) immediately with the new session state data
                 st.rerun()
