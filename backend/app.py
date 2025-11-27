@@ -207,78 +207,92 @@ def extract_text_from_file(uploaded_file) -> str:
         return (content[:300] + "...") if len(content) > 300 else content
     return f"[Extracted text unavailable for {name}]"
 
-
-def parse_fields_from_text(text: str, filename: str = "") -> dict:
-    """Extract common applicant fields from document text using regex heuristics.
-
-    Looks for patterns like:
-    - Applicant Name: <name>
-    - Applicant Age: <digits>
-    - Annual Household Income: $<number>
-    - Requested Loan Amount: $<number>
-
-    Returns a dict with keys: `name`, `age`, `income`, `requested_loan`, `text_notes`.
+def parse_fields_from_text(text: str, filename: str = "") -> list[dict]:
+    """
+    Extract common applicant fields from document text using regex heuristics.
+    Returns a LIST of dictionaries (one per applicant found in the text).
     """
     import re
 
-    out = {
-        "name": None,
-        "age": None,
-        "income": None,
-        "requested_loan": None,
-        "text_notes": text,
-    }
-
     if not text:
-        return out
+        return []
 
-    # Normalize whitespace
-    t = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
+    # 1. Split text into segments based on "Applicant Name:" or "Name:"
+    # We use a positive lookahead (?=...) to split BUT keep the "Applicant Name" identifier in the chunk
+    # This creates a list where each item is the text for one distinct applicant.
+    segments = re.split(r'(?=\b(?:Applicant )?Name:)', text, flags=re.IGNORECASE)
 
-    # Name: look for 'Applicant Name:' or 'Name:' prefixes
-    m = re.search(r"Applicant Name:\s*(.+?)(?:\n|Applicant Age:|Applicant|$)", t, flags=re.IGNORECASE)
-    if not m:
-        m = re.search(r"\bName:\s*(.+?)(?:\n|$)", t, flags=re.IGNORECASE)
-    if m:
-        out["name"] = m.group(1).strip().rstrip(',')
+    parsed_applicants = []
+    
+    # Counter to help with unique fallbacks if multiple people are in one file
+    counter = 1
 
-    # Age
-    m = re.search(r"Applicant Age:\s*(\d{1,3})", t, flags=re.IGNORECASE)
-    if not m:
-        m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.IGNORECASE)
-    if m:
-        try:
-            out["age"] = int(m.group(1))
-        except Exception:
-            out["age"] = None
+    for segment in segments:
+        # Skip empty segments or segments that don't actually contain a name field
+        # (This filters out header text that might appear before the first applicant)
+        if not re.search(r'\b(?:Applicant )?Name:', segment, flags=re.IGNORECASE):
+            continue
 
-    # Income
-    m = re.search(r"Annual Household Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
-    if not m:
-        m = re.search(r"Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
-    if m:
-        s = m.group(1).replace(',', '')
-        try:
-            out["income"] = int(s)
-        except Exception:
-            out["income"] = None
+        out = {
+            "name": None,
+            "age": None,
+            "income": None,
+            "requested_loan": None,
+            "text_notes": segment.strip(), # We only store the text relevant to THIS applicant
+        }
 
-    # Requested loan
-    m = re.search(r"Requested Loan Amount:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
-    if not m:
-        m = re.search(r"Requested Loan:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
-    if m:
-        s = m.group(1).replace(',', '')
-        try:
-            out["requested_loan"] = int(s)
-        except Exception:
-            out["requested_loan"] = None
+        # Normalize whitespace for easier regex matching
+        t = "\n".join([line.strip() for line in segment.splitlines() if line.strip()])
 
-    # If name missing, fallback to filename as a human-friendly name
-    if not out.get("name") and filename:
-        out["name"] = os.path.splitext(os.path.basename(filename))[0]
+        # --- EXTRACT FIELDS FROM THIS SPECIFIC SEGMENT ---
 
-    return out
+        # Name
+        m = re.search(r"(?:Applicant )?Name:\s*(.+?)(?:\n|Applicant Age:|Applicant|$)", t, flags=re.IGNORECASE)
+        if m:
+            out["name"] = m.group(1).strip().rstrip(',')
+
+        # Age
+        m = re.search(r"Applicant Age:\s*(\d{1,3})", t, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"(\d{1,3})\s+years?\s+old", t, flags=re.IGNORECASE)
+        if m:
+            try:
+                out["age"] = int(m.group(1))
+            except Exception:
+                out["age"] = None
+
+        # Income
+        m = re.search(r"Annual Household Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"Income:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+        if m:
+            s = m.group(1).replace(',', '')
+            try:
+                out["income"] = int(s)
+            except Exception:
+                out["income"] = None
+
+        # Requested loan
+        m = re.search(r"Requested Loan Amount:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"Requested Loan:\s*\$?([0-9,]+)", t, flags=re.IGNORECASE)
+        if m:
+            s = m.group(1).replace(',', '')
+            try:
+                out["requested_loan"] = int(s)
+            except Exception:
+                out["requested_loan"] = None
+
+        # Fallback Name if missing
+        if not out.get("name") and filename:
+            base_name = os.path.splitext(os.path.basename(filename))[0]
+            out["name"] = f"{base_name}_{counter}"
+
+        parsed_applicants.append(out)
+        counter += 1
+
+    return parsed_applicants
+
 
 def main() -> None:
     # --- NEW: TRIGGER ONBOARDING (show above the main title) ---
@@ -387,6 +401,9 @@ def main() -> None:
         st.markdown("---")
 
     # Load data: prefer CSV if provided, otherwise build from uploaded docs or demo
+    # ... inside main() ...
+
+    # Load data: prefer CSV if provided, otherwise build from uploaded docs or demo
     if 'uploaded_files' in locals() and uploaded_files:
         csvs = [f for f in uploaded_files if str(f.name).lower().endswith('.csv')]
         if csvs:
@@ -399,24 +416,31 @@ def main() -> None:
         else:
             rows = []
             next_id = 1
-            # If user provided multiple files, give them incremental numeric ids
+            
             for f in uploaded_files:
+                # 1. Extract all text from the file (e.g., all 3 pages)
                 text = extract_text_from_file(f)
-                parsed = parse_fields_from_text(text, getattr(f, 'name', ''))
-                # Store extracted text in 'text_notes' for feature extraction to analyze
-                full_text = parsed.get('text_notes') or text
-                row = {
-                    'id': next_id,
-                    'name': parsed.get('name') or getattr(f, 'name', '') or f"applicant_{next_id}",
-                    'age': parsed.get('age'),
-                    'income': parsed.get('income'),
-                    'requested_loan': parsed.get('requested_loan'),
-                    'credit_score': None,
-                    'text_notes': full_text,  # Full text for LLM analysis
-                    'text_preview': full_text[:200] + '...' if len(full_text) > 200 else full_text,  # Short preview for UI
-                }
-                rows.append(row)
-                next_id += 1
+                
+                # 2. Parse text into a LIST of applicants (new logic)
+                applicants_found = parse_fields_from_text(text, getattr(f, 'name', ''))
+                
+                # 3. Iterate through every applicant found in this single file
+                for applicant in applicants_found:
+                    full_text = applicant.get('text_notes')
+                    
+                    row = {
+                        'id': next_id,
+                        'name': applicant.get('name') or f"applicant_{next_id}",
+                        'age': applicant.get('age'),
+                        'income': applicant.get('income'),
+                        'requested_loan': applicant.get('requested_loan'),
+                        'credit_score': None,
+                        'text_notes': full_text,
+                        'text_preview': full_text[:200] + '...' if full_text and len(full_text) > 200 else (full_text or ""),
+                    }
+                    rows.append(row)
+                    next_id += 1
+                    
             df = pd.DataFrame(rows)
     else:
         # Demo datasets removed: require user-provided files for analysis.
