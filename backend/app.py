@@ -381,10 +381,6 @@ def main() -> None:
             accept_multiple_files=True,
         )
 
-        st.markdown("---")
-        st.subheader("Applicant scope")
-        applicant_scope = st.selectbox("Who are you uploading?", ["Individuals", "Businesses"], index=0)
-
         mock_mode = False
         run_button = st.button("Run Model", type="primary")
         st.markdown("---")
@@ -662,32 +658,6 @@ def main() -> None:
     else:
         st.info("Select a valid applicant ID to see details.")
         recommendation = "None"
-
-    st.markdown("---")
-    st.markdown("**Story Playback**")
-    pcol1, pcol2, pcol3 = st.columns([1, 1, 2])
-    prev_clicked = pcol1.button("◀ Prev")
-    play_clicked = pcol2.button("Play")
-    # placeholder progress widget for playback actions
-    progress_placeholder = st.empty()
-    progress_placeholder.progress(0)
-
-    # Story Playback Logic
-    if play_clicked and 'summary_text' in locals():
-        steps = []
-        steps.append(("Summary", summary_text))
-        steps.append(("Local Explanation", recommendation))
-        steps.append(("Risky Phrases", risky_text or "None"))
-        sent_text = f"score={sent_score}" if sent_score is not None else "unknown"
-        steps.append(("Sentiment", sent_text))
-
-        for i, (title, body) in enumerate(steps, start=1):
-            st.markdown(f"**Step {i}: {title}**")
-            # Simple highlight
-            st.info(body)
-            progress_placeholder.progress(int(i / len(steps) * 100))
-            time.sleep(0.4)
-        progress_placeholder.progress(100)
 
     # Trigger model run
     if run_button:
